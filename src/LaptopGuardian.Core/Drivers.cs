@@ -166,8 +166,11 @@ public static class DriverChecks
                 string id = m["PNPDeviceID"] as string ?? "";
                 string? name = m["Name"] as string;
                 if (string.IsNullOrWhiteSpace(name) && m["HardwareID"] is string[] hw && hw.Length > 0)
+                {
                     // A hardware id such as "Maker_Maker_Virtual_Camera" reads better without the repeat.
-                    name = string.Join(' ', hw[0].Split('_', ' ').Where((w, i, all) => i == 0 || !w.Equals(all[i - 1], StringComparison.OrdinalIgnoreCase)));
+                    var words = hw[0].Split('_', ' ');
+                    name = string.Join(' ', words.Where((w, i) => i == 0 || !w.Equals(words[i - 1], StringComparison.OrdinalIgnoreCase)));
+                }
                 list.Add(new ProblemDevice(string.IsNullOrWhiteSpace(name) ? id : name!, id, code, ProblemMeaning(code)));
             }
         }

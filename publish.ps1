@@ -51,6 +51,9 @@ if ($Install) {
 
 if ($Release) {
     $notes = "Download **LaptopGuardian.exe** and run it. It installs itself; no administrator rights or .NET needed. Installed copies update themselves.`n`nThe program is not code-signed yet, so Windows may show ""Windows protected your PC"". Choose **More info**, then **Run anyway**.`n`nSHA-256: ``$hash``"
-    & gh release create "v$version" $exe $sha --repo Deaeath/LaptopGuardian --title "LaptopGuardian $version" --notes $notes
+    # A file, because Windows PowerShell 5.1 splits arguments that contain double quotes.
+    $notesFile = Join-Path $dist 'notes.md'
+    [IO.File]::WriteAllText($notesFile, $notes)
+    & gh release create "v$version" $exe $sha --repo Deaeath/LaptopGuardian --title "LaptopGuardian $version" --notes-file $notesFile
     if ($LASTEXITCODE -ne 0) { throw 'Could not create the release.' }
 }
