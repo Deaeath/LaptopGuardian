@@ -263,6 +263,7 @@ public sealed class MainViewModel : Observable
         OpenLinkCommand = new Command(p => Open(p as string));
         CheckDriversCommand = new Command(() => _ = _g.CheckDriversAsync());
         CheckUpdatesCommand = new Command(() => CheckForUpdatesRequested?.Invoke());
+        RestoreSuggestionsCommand = new Command(() => { _g.RestoreDismissed(); ShowMessage("Hidden suggestions are back on the Overview page."); });
 
         AppIcon = LoadIcon();
 
@@ -461,6 +462,11 @@ public sealed class MainViewModel : Observable
     public ICommand OpenLinkCommand { get; }
     public ICommand CheckDriversCommand { get; }
     public ICommand CheckUpdatesCommand { get; }
+    public ICommand RestoreSuggestionsCommand { get; }
+    public string ThermalZoneText => _g.ThermalZoneC is double z ? $"{z:0}°C" : "Not available";
+    public string RepoUrl => $"https://github.com/{AppUpdater.Repo}";
+    public string IssuesUrl => RepoUrl + "/issues/new/choose";
+    public string ReleasesUrl => AppUpdater.ReleasesPage;
 
     // ------------------------------------------------------------ drivers and app updates
 
@@ -680,7 +686,7 @@ public sealed class MainViewModel : Observable
             int asleep = crashes.Count(c => c.Crash != null && CrashScanner.IsAsleepCause(c.Crash.Cause));
             CrashSummary = crashes.Count == 0
                 ? "None in the last 60 days."
-                : $"{Fmt.Plural(crashes.Count, "unexpected shutdown", "unexpected shutdowns")} in the last 60 days, {asleep} of them while asleep." +
+                : $"{Fmt.Plural(crashes.Count, "unexpected shutdown", "unexpected shutdowns")} in the last 60 days{(asleep > 0 ? $", {asleep} of them while asleep" : "")}." +
                   (crashes.Count >= 2 && crashes.Take(2).All(c => c.Crash != null && CrashScanner.IsAsleepCause(c.Crash.Cause)) ? " The two most recent both happened during sleep." : "");
             GraphicsErrors = items.Where(i => i.Kind is IncidentKind.GraphicsError or IncidentKind.HardwareError).Take(60).Select(i => new IncidentVm(i, false)).ToList();
 
@@ -752,7 +758,7 @@ public sealed class MainViewModel : Observable
         {
             nameof(GpuName), nameof(GpuAsleep), nameof(GpuTempText), nameof(GpuTempBrush), nameof(GpuLimitText), nameof(GpuThrottleText), nameof(GpuThrottleBrush),
             nameof(GpuUtil), nameof(GpuUtilText), nameof(GpuMem), nameof(GpuMemText), nameof(GpuMemBrush), nameof(GpuPowerText),
-            nameof(GpuApps), nameof(GpuAppsText), nameof(TempSeries), nameof(UtilSeries), nameof(MemSeries),
+            nameof(GpuApps), nameof(GpuAppsText), nameof(TempSeries), nameof(UtilSeries), nameof(MemSeries), nameof(ThermalZoneText),
         }) Raise(name);
     }
 

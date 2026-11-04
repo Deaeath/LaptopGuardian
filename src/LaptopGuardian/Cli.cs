@@ -69,6 +69,12 @@ internal static class Cli
     public static int WriteIcon(string[] args)
     {
         string path = Arg(args, "--write-icon") ?? "LaptopGuardian.ico";
+        if (path.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+        {
+            using var png = IconFactory.Render(128, IconFactory.Calm);
+            png.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            return 0;
+        }
         File.WriteAllBytes(path, IconFactory.Ico(IconFactory.Calm, 16, 20, 24, 32, 40, 48, 64, 128, 256));
         return 0;
     }

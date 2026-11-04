@@ -1,0 +1,23 @@
+name: Report a problem
+description: Something is wrong, or LaptopGuardian said something that is not true.
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: Health report (optional)
+      description: >
+        In LaptopGuardian, click "Copy health report" and paste it here. It helps a lot, but read it first: it lists your
+        laptop's model, drivers, and the apps that were busiest when errors happened. Remove anything you would rather not post publicly.
+      render: markdown
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Settings > About.

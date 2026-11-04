@@ -43,17 +43,20 @@ public sealed class Guardian : IDisposable
     FlightRecorder Recorder => _recorder ??= new FlightRecorder(_dataDir == null ? null : Path.Combine(_dataDir, "flight-recorder.jsonl"));
     FlightRecorder? _recorder;
     volatile string _powerState = "awake";
+    /// <summary>The firmware's thermal sensor, as last recorded.</summary>
+    public double? ThermalZoneC { get; private set; }
 
     void RecordFlightSample()
     {
         var (pct, ac) = PowerStatus();
+        ThermalZoneC = FlightRecorder.ReadThermalZone();
         var g = Gpu.Latest;
         if (g != null && DateTimeOffset.Now - g.At > TimeSpan.FromMinutes(1)) g = null;
         Recorder.Write(new FlightSample
         {
             At = DateTimeOffset.Now,
             State = _powerState,
-            ZoneC = FlightRecorder.ReadThermalZone(),
+            ZoneC = ThermalZoneC,
             GpuC = g?.TemperatureC,
             GpuLimitC = g?.TemperatureLimitC,
             GpuBusyPct = g?.UtilizationPct is double u ? Math.Round(u) : null,
@@ -124,6 +127,11 @@ public sealed class Guardian : IDisposable
             if (string.IsNullOrEmpty(System.Model)) System = SystemInfo.Read();
             var report = await DriverChecks.RunAsync(System);
             Drivers = report;
+            Recompute(); // everything but Windows Update, which can take minutes
+
+            var wuUpdates = await Task.Run(() => DriverChecks.WindowsUpdateDrivers(report.Notes));
+            report.Updates.AddRange(wuUpdates);
+            report.WindowsUpdateChecked = true;
             State.LastDriverCheck = report.CheckedAt;
 
             var fresh = report.Updates.Where(u => !State.AnnouncedDriverUpdates.Contains(u.Key)).ToList();
@@ -384,10 +392,91 @@ public sealed class Guardian : IDisposable
         Changed?.Invoke();
     }
 
+    public void RestoreDismissed()
+    {
+        State.DismissedRecommendations.Clear();
+        SaveState();
+        Recompute();
+    }
+
     public void Dismiss(string recommendationId)
     {
         if (!State.DismissedRecommendations.Contains(recommendationId)) State.DismissedRecommendations.Add(recommendationId);
         SaveState();
+        Recompute();
+    }
+
+    // ---------------------------------------------------------------- sample data
+
+    /// <summary>Made-up data for the public screenshots, so they show no real machine, apps or drivers.</summary>
+    public void LoadSampleData()
+    {
+        var now = DateTimeOffset.Now;
+        System = new SystemSnapshot
+        {
+            Manufacturer = "Example", Model = "Laptop 15", BiosVersion = "1.24", BiosDate = now.AddMonths(-14).Date,
+            Windows = "Windows 11 Home 25H2", Cpu = "AMD Ryzen 7 7840HS",
+            Adapters = new()
+            {
+                new GraphicsAdapter("NVIDIA GeForce RTX 4060 Laptop GPU", "32.0.16.1656", "616.56", now.AddMonths(-2).Date, 8, "NVIDIA"),
+                new GraphicsAdapter("AMD Radeon(TM) 780M", "32.0.21045.16010", "26.10.1", now.AddDays(-20).Date, 0.5, "AMD"),
+            },
+        };
+        Power = new PowerSettingsInfo
+        {
+            SchemeName = "Balanced", SleepAfterAc = 1800, SleepAfterDc = 300, HibernateAfterAc = 0, HibernateAfterDc = 3600,
+            LidAc = PowerConfig.ActionSleep, LidDc = PowerConfig.ActionSleep, PowerButtonAc = PowerConfig.ActionSleep, PowerButtonDc = PowerConfig.ActionSleep,
+            ModernStandby = true, HibernateSupported = true, HiberFilePresent = true, LidPresent = true, HasBattery = true,
+        };
+        Battery = new BatteryReport { DesignMWh = 60000, FullMWh = 51600, Cycles = 212, ModernStandby = true };
+
+        Incident Crash(int minutesAgo, int gapSeconds, FlightSample? reading, uint bug = 0, bool standby = false, DateTimeOffset? asleep = null)
+        {
+            var back = now.AddMinutes(-minutesAgo);
+            var active = back.AddSeconds(-gapSeconds);
+            var facts = new CrashFacts { RestartedAt = back, LastActivity = active, LastReading = reading, BugcheckCode = bug, ConnectedStandby = standby, AsleepSince = asleep };
+            var e = new KernelPower41(minutesAgo, back, bug, 0, 0, false, standby);
+            return CrashScanner.ToIncident(new CrashScanner.Found(e, facts, CrashClassifier.Classify(facts)));
+        }
+        var hot = new FlightSample { At = now.AddMinutes(-95).AddSeconds(-24), ZoneC = 96, GpuC = 87, GpuLimitC = 87, GpuBusyPct = 99, GpuMemoryPct = 91, GpuW = 112, OnAc = true, TopApps = "Game.exe 92%, Browser.exe 4%" };
+        Journal.Add(Crash(95, 24, hot), save: false);
+        Journal.Add(Crash(60 * 27, 31, hot with { At = now.AddMinutes(-60 * 27).AddSeconds(-31), GpuC = 86 }), save: false);
+        Journal.Add(Crash(60 * 24 * 9, 300, null, bug: 0x116), save: false);
+        var gpu = GraphicsEvents.Decode("nvlddmkm", 153, 2, new[] { @"\Device\Video3", "Error occurred on GPUID: 100" });
+        Journal.Add(new Incident
+        {
+            Id = "sample:gpu", Kind = gpu.Kind, Time = now.AddHours(-30), Severity = gpu.Severity, Title = gpu.Title, Summary = gpu.Summary, Detail = gpu.Detail,
+            Source = "nvlddmkm event 153", Data = gpu.Data,
+            Gpu = new GpuSnapshot { TemperatureC = 86, TemperatureLimitC = 87, UtilizationPct = 98, MemoryUsedGB = 7.4, MemoryTotalGB = 8, PowerW = 110, TopApps = new() { new GpuApp("Game.exe", 1, 91) } },
+        }, save: false);
+
+        var start = now.AddDays(-40);
+        var retries = Enumerable.Range(0, 300).Select(i => new WerEntry(start.AddHours(i * 4), "LiveKernelEvent", i % 2 == 0 ? "141" : "193",
+            i % 2 == 0 ? "sample-1" : "sample-2", "2051", "", "")).ToList();
+        KernelReports = WerReports.Group(retries);
+
+        var nvidia = new DriverUpdate("nvidia:621.14", "NVIDIA", "NVIDIA Game Ready driver", "616.56", "621.14", now.AddDays(-3).Date, DriverPages.Nvidia, null, Severity.Warning, DriverPages.Nvidia);
+        var amd = new DriverUpdate("amd:26.10.2", "AMD", "AMD Software driver", "26.10.1", "26.10.2", null, DriverPages.Amd, null, Severity.Warning);
+        Drivers = new DriverReport
+        {
+            Updates = new() { nvidia, amd },
+            NvidiaLatest = "621.14", AmdLatest = "26.10.2", AmdPageUrl = DriverPages.Amd, WindowsUpdateChecked = true,
+            Apps = new() { new InstalledApp("NVIDIA App", "sample.nvidia"), new InstalledApp("AMD Software", "sample.amd") },
+            Installed = new()
+            {
+                new DriverInfo("Graphics", "NVIDIA GeForce RTX 4060 Laptop GPU", "NVIDIA", "32.0.16.1656", now.AddMonths(-2).Date),
+                new DriverInfo("Graphics", "AMD Radeon(TM) 780M", "Advanced Micro Devices, Inc.", "32.0.21045.16010", now.AddDays(-20).Date),
+                new DriverInfo("Network", "Wi-Fi 6E Wireless LAN Card", "Example", "3.4.2.1046", now.AddMonths(-20).Date),
+            },
+        };
+        ThermalZoneC = 71;
+        Gpu.InjectSamples(Enumerable.Range(0, 120).Select(i => new GpuSnapshot
+        {
+            At = now.AddSeconds((i - 120) * 7.5), Name = "NVIDIA GeForce RTX 4060 Laptop GPU",
+            TemperatureC = 66 + 8 * Math.Sin(i / 14.0), TemperatureLimitC = 87, UtilizationPct = 52 + 22 * Math.Sin(i / 9.0), MemoryUsedGB = 3.4 + 0.6 * Math.Sin(i / 30.0), MemoryTotalGB = 8,
+            PowerW = 58, PowerLimitW = 115, TopApps = new() { new GpuApp("Game.exe", 1, 48), new GpuApp("Browser.exe", 2, 5) },
+        }));
+        State.LastScan = now;
         Recompute();
     }
 

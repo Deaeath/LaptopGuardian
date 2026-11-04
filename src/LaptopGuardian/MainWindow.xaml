@@ -339,7 +339,7 @@
                     <!-- ======================== Shutdowns -->
                     <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=shutdowns}">
                         <TextBlock Style="{StaticResource PageTitle}" Text="Unexpected shutdowns" />
-                        <TextBlock Style="{StaticResource PageLead}" Text="When Windows stops without shutting down properly, it records the last moment it was alive, whether it was asleep, and whether the power button was pressed. LaptopGuardian reads that record and the battery report to tell you what most likely happened." />
+                        <TextBlock Style="{StaticResource PageLead}" Text="When Windows stops without shutting down properly, it can record very little. LaptopGuardian combines what Windows kept with its own flight recorder, which saves temperatures and load every 10 seconds, to tell you what most likely happened." />
                         <Border Style="{StaticResource Card}" Margin="0,0,0,16">
                             <TextBlock Text="{Binding CrashSummary}" Style="{StaticResource Body}" />
                         </Border>
@@ -382,6 +382,10 @@
                                     <DockPanel LastChildFill="False">
                                         <TextBlock DockPanel.Dock="Left" Text="Power" Style="{StaticResource CardLabel}" />
                                         <TextBlock DockPanel.Dock="Right" Text="{Binding GpuPowerText}" FontWeight="SemiBold" />
+                                    </DockPanel>
+                                    <DockPanel LastChildFill="False" Margin="0,12,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Laptop's thermal sensor" Style="{StaticResource CardLabel}" />
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding ThermalZoneText}" FontWeight="SemiBold" />
                                     </DockPanel>
                                     <TextBlock Style="{StaticResource Small}" Text="{Binding GpuAppsText}" Margin="0,12,0,0" />
                                 </StackPanel>
@@ -643,7 +647,10 @@
                                 <CheckBox Style="{StaticResource Switch}" Content="The battery is low" IsChecked="{Binding NotifyBattery, Mode=TwoWay}" />
                                 <CheckBox Style="{StaticResource Switch}" Content="The hardware reports a serious error" IsChecked="{Binding NotifyHardware, Mode=TwoWay}" />
                                 <CheckBox Style="{StaticResource Switch}" Content="A newer driver or BIOS is available" IsChecked="{Binding NotifyDriverUpdates, Mode=TwoWay}" />
-                                <Button Style="{StaticResource SubtleButton}" Content="Send a test notification" Command="{Binding TestNotificationCommand}" HorizontalAlignment="Left" Margin="0,12,0,0" />
+                                <WrapPanel Margin="0,12,0,0">
+                                    <Button Style="{StaticResource SubtleButton}" Content="Send a test notification" Command="{Binding TestNotificationCommand}" Margin="0,0,10,0" />
+                                    <Button Style="{StaticResource SubtleButton}" Content="Show hidden suggestions" Command="{Binding RestoreSuggestionsCommand}" />
+                                </WrapPanel>
                             </StackPanel>
                         </Border>
 
@@ -667,6 +674,11 @@
                                 <TextBlock Style="{StaticResource Small}" Margin="0,4,0,0">
                                     <Run Text="Installed in " /><Run Text="{Binding InstallFolder, Mode=OneWay}" />
                                 </TextBlock>
+                                <WrapPanel Margin="0,8,0,0">
+                                    <Button Style="{StaticResource LinkButton}" Content="What's new" Command="{Binding OpenLinkCommand}" CommandParameter="{Binding ReleasesUrl}" Margin="0,0,18,0" />
+                                    <Button Style="{StaticResource LinkButton}" Content="Report a problem" Command="{Binding OpenLinkCommand}" CommandParameter="{Binding IssuesUrl}" Margin="0,0,18,0" />
+                                    <Button Style="{StaticResource LinkButton}" Content="Source code" Command="{Binding OpenLinkCommand}" CommandParameter="{Binding RepoUrl}" />
+                                </WrapPanel>
                                 <Button Style="{StaticResource LinkButton}" Command="{Binding OpenDataFolderCommand}" HorizontalAlignment="Left" Margin="0,8,0,0">
                                     <TextBlock>
                                         <Run Text="Open the data folder (" /><Run Text="{Binding DataFolder, Mode=OneWay}" /><Run Text=")" />

@@ -32,6 +32,8 @@ public sealed class DriverReport
     public string? AmdLatest { get; set; }
     public string? AmdPageUrl { get; set; }
     public List<InstalledApp> Apps { get; set; } = new();
+    /// <summary>False while the slow Windows Update search is still running.</summary>
+    public bool WindowsUpdateChecked { get; set; }
     public List<DriverInfo> Installed { get; init; } = new();
     public List<ProblemDevice> Problems { get; init; } = new();
     public List<DriverUpdate> Updates { get; init; } = new();
@@ -66,7 +68,6 @@ public static class DriverChecks
         var facts = new DriverReport { Notes = notes };
         var installed = Task.Run(Installed, ct);
         var problems = Task.Run(Problems, ct);
-        var wu = Task.Run(() => WindowsUpdateDrivers(notes), ct);
         var apps = Task.Run(InstalledApps.Read, ct);
         var nvidiaGpu = sys.Adapters.FirstOrDefault(a => a.Vendor == "NVIDIA");
         var amdGpu = sys.Adapters.FirstOrDefault(a => a.Vendor == "AMD");
@@ -74,12 +75,11 @@ public static class DriverChecks
         var amd = amdGpu != null ? Amd(amdGpu, sys, facts, notes, ct) : Task.FromResult<DriverUpdate?>(null);
         var bios = sys.IsAsus ? AsusBios(sys, notes, ct) : Task.FromResult<(DriverUpdate?, string?, bool)>((null, null, false));
 
-        await Task.WhenAll(installed, problems, wu, apps, nvidia, amd, bios);
+        await Task.WhenAll(installed, problems, apps, nvidia, amd, bios);
         var updates = new List<DriverUpdate>();
         if (nvidia.Result is DriverUpdate n) updates.Add(n);
         if (amd.Result is DriverUpdate am) updates.Add(am);
         if (bios.Result.Item1 is DriverUpdate b) updates.Add(b);
-        updates.AddRange(wu.Result);
         return new DriverReport
         {
             Installed = installed.Result,
@@ -374,7 +374,8 @@ public static class DriverChecks
 
     // ------------------------------------------------------------ Windows Update
 
-    static List<DriverUpdate> WindowsUpdateDrivers(List<string> notes)
+    /// <summary>Can take minutes (144 seconds measured), so it runs after everything else has been shown.</summary>
+    public static List<DriverUpdate> WindowsUpdateDrivers(List<string> notes)
     {
         var list = new List<DriverUpdate>();
         try

@@ -19,6 +19,8 @@ public partial class App : Application
 
     public string? ScreenshotDir { get; set; }
     public bool? ForceDark { get; set; }
+    public bool Sample { get; set; }
+    public bool Viewport { get; set; }
     public string? UpdatedFrom { get; set; }
 
     Timer? _updateTimer;
@@ -209,13 +211,17 @@ public partial class App : Application
             Directory.CreateDirectory(dir);
             Theme.Apply(ForceDark);
             var g = new Guardian(dataDir: null);
-            await Task.Run(() =>
+            if (Sample) g.LoadSampleData();
+            else
             {
-                g.Gpu.SampleOnce(); Thread.Sleep(1000);
-                for (int i = 0; i < 12; i++) { g.Gpu.SampleOnce(); Thread.Sleep(250); }
-                g.Scan();
-            });
-            await g.CheckDriversAsync();
+                await Task.Run(() =>
+                {
+                    g.Gpu.SampleOnce(); Thread.Sleep(1000);
+                    for (int i = 0; i < 12; i++) { g.Gpu.SampleOnce(); Thread.Sleep(250); }
+                    g.Scan();
+                });
+                await g.CheckDriversAsync();
+            }
             var vm = new MainViewModel(g, Dispatcher);
             var w = new MainWindow(vm)
             {
@@ -231,8 +237,10 @@ public partial class App : Application
                 await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
                 var root = (FrameworkElement)w.Content;
                 // Lay the page out at full height so the PNG shows all of it, not one screenful.
-                root.Measure(new Size(w.Width - 16, double.PositiveInfinity));
-                root.Arrange(new Rect(0, 0, w.Width - 16, Math.Max(800, root.DesiredSize.Height)));
+                double height = w.ActualHeight - 39;
+                if (!Viewport) { root.Measure(new Size(w.Width - 16, double.PositiveInfinity)); height = Math.Max(800, root.DesiredSize.Height); }
+                else root.Measure(new Size(w.Width - 16, height));
+                root.Arrange(new Rect(0, 0, w.Width - 16, height));
                 var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap(
                     (int)root.ActualWidth, (int)root.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
                 var bg = new System.Windows.Shapes.Rectangle { Width = root.ActualWidth, Height = root.ActualHeight, Fill = Theme.Brush("Bg") };

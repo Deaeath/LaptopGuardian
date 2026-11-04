@@ -22,6 +22,8 @@ public static class Program
             {
                 ScreenshotDir = i + 1 < args.Length ? args[i + 1] : ".",
                 ForceDark = args.Contains("--dark") ? true : args.Contains("--light") ? false : null,
+                Sample = args.Contains("--sample"),
+                Viewport = args.Contains("--viewport"),
             };
             shots.InitializeComponent();
             return shots.Run();

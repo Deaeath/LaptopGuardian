@@ -1,16 +1,16 @@
 <#
 .SYNOPSIS
-    Tests and builds LaptopGuardian; optionally installs it and publishes a GitHub release.
+Tests and builds LaptopGuardian locally; optionally installs it.
 .DESCRIPTION
     Runs the unit tests and publishes a self-contained single-file build to dist\.
     -Install replaces the copy in %LOCALAPPDATA%\Programs\LaptopGuardian and starts it.
-    -Release creates the GitHub release v<version> with LaptopGuardian.exe and its SHA-256 hash, which is
-    what every installed copy updates itself from. The version comes from src\Directory.Build.props.
+    The version comes from src\Directory.Build.props. Releases are not made here: pushing a tag v<version>
+    makes GitHub Actions test, build and publish it from that source (.github/workflows/release.yml).
     Needs the .NET 10 SDK: on PATH, or installed per-user at %LOCALAPPDATA%\Microsoft\dotnet10.
 .EXAMPLE
-    .\publish.ps1 -Install -Release
+    .\publish.ps1 -Install
 #>
-param([switch]$Install, [switch]$Release, [string]$VersionOverride, [switch]$SkipTests)
+param([switch]$Install, [string]$VersionOverride, [switch]$SkipTests)
 $ErrorActionPreference = 'Stop'
 $env:DOTNET_NOLOGO = '1'
 $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
@@ -47,13 +47,4 @@ if ($Install) {
     # The exe installs itself (and replaces any running copy) when run from outside the install folder.
     Start-Process $exe
     Write-Host 'Installed and started.'
-}
-
-if ($Release) {
-    $notes = "Download **LaptopGuardian.exe** and run it. It installs itself; no administrator rights or .NET needed. Installed copies update themselves.`n`nThe program is not code-signed yet, so Windows may show ""Windows protected your PC"". Choose **More info**, then **Run anyway**.`n`nSHA-256: ``$hash``"
-    # A file, because Windows PowerShell 5.1 splits arguments that contain double quotes.
-    $notesFile = Join-Path $dist 'notes.md'
-    [IO.File]::WriteAllText($notesFile, $notes)
-    & gh release create "v$version" $exe $sha --repo Deaeath/LaptopGuardian --title "LaptopGuardian $version" --notes-file $notesFile
-    if ($LASTEXITCODE -ne 0) { throw 'Could not create the release.' }
 }

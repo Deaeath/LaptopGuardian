@@ -3,9 +3,10 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <Product>LaptopGuardian</Product>
     <Company>LaptopGuardian</Company>
+    <Copyright>Copyright (c) 2026 Deaeath</Copyright>
     <!-- The machine-wide NuGet config points at a Visual Studio folder that no longer exists. -->
     <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

@@ -25,7 +25,7 @@ public static class InstalledApps
                     dynamic item = items.Item(i);
                     string name = item.Name;
                     string id = item.Path;
-                    if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(id)) list.Add(new InstalledApp(name, id));
+                    if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(id)) lock (list) list.Add(new InstalledApp(name, id));
                 }
             }
             catch (Exception ex) { Debug.WriteLine(ex); }
@@ -33,8 +33,8 @@ public static class InstalledApps
         { IsBackground = true };
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        t.Join(TimeSpan.FromSeconds(15));
-        return list;
+        t.Join(TimeSpan.FromSeconds(45));
+        lock (list) return list.ToList();
     }
 
     public static InstalledApp? First(IEnumerable<InstalledApp> apps, params string[] names)
@@ -218,7 +218,7 @@ public static class UpdateGuides
         var wu = d.Updates.Where(u => u.Source == "Windows Update").ToList();
         var page = new GuideAction("Open Windows Update", GuideAction.Link, DriverPages.OptionalUpdates);
         if (wu.Count == 0)
-            return new UpdateGuide("windows-update", "Windows Update drivers", "No driver updates are waiting.", false, Array.Empty<string>(), new[] { page });
+            return new UpdateGuide("windows-update", "Windows Update drivers", d.WindowsUpdateChecked ? "No driver updates are waiting." : "Still asking Windows Update. This can take a few minutes.", false, Array.Empty<string>(), new[] { page });
         return new UpdateGuide("windows-update", "Windows Update drivers", $"{Fmt.Plural(wu.Count, "update is", "updates are")} waiting: {string.Join("; ", wu.Take(3).Select(u => u.Title))}{(wu.Count > 3 ? "; and more" : "")}.", true,
             new[] { "Click Install all. Windows asks for permission, then downloads and installs them.", "Restart if it asks. To choose them one at a time, use Open Windows Update." },
             new[] { new GuideAction("Install all", GuideAction.Apply, DriverChecks.ActionInstallWindowsUpdateDrivers, Primary: true), page });

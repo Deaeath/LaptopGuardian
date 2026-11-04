@@ -1,0 +1,60 @@
+# Builds the release on GitHub, from the tagged source, so anyone can check that the download came from
+# this code. Installed copies update themselves from the assets this creates: keep their names.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Test
+        run: dotnet test src/LaptopGuardian.Tests/LaptopGuardian.Tests.csproj --nologo
+      - name: Build
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          dotnet publish src/LaptopGuardian/LaptopGuardian.csproj -c Release -r win-x64 --self-contained true "-p:Version=$version" `
+            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
+            -p:DebugType=none -p:DebugSymbols=false -p:ContinuousIntegrationBuild=true -o dist --nologo
+          $hash = (Get-FileHash dist/LaptopGuardian.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText('dist/LaptopGuardian.exe.sha256', "$hash  LaptopGuardian.exe`n")
+          "HASH=$hash" >> $env:GITHUB_ENV
+          "VERSION=$version" >> $env:GITHUB_ENV
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/LaptopGuardian.exe
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # This version's section of the changelog, then how to install and verify.
+          $lines = Get-Content CHANGELOG.md
+          $start = [Array]::FindIndex($lines, [Predicate[string]]{ param($l) $l -like "## $env:VERSION*" })
+          $notes = @()
+          if ($start -ge 0) {
+            for ($i = $start + 1; $i -lt $lines.Count -and $lines[$i] -notlike '## *'; $i++) { $notes += $lines[$i] }
+          }
+          $notes += @(
+            '', '## Install',
+            'Download **LaptopGuardian.exe** and run it. It installs itself; no administrator rights or .NET needed. Installed copies update themselves.',
+            '', 'The program is not code-signed yet, so Windows may show "Windows protected your PC". Choose **More info**, then **Run anyway**.',
+            '', '## Verify the download',
+            "SHA-256: ``$env:HASH``",
+            '', 'This file was built by GitHub Actions from the tagged source. To check that with the GitHub CLI:',
+            '```', 'gh attestation verify LaptopGuardian.exe --repo ${{ github.repository }}', '```'
+          )
+          [IO.File]::WriteAllLines('dist/notes.md', $notes)
+          gh release create '${{ github.ref_name }}' dist/LaptopGuardian.exe dist/LaptopGuardian.exe.sha256 --title "LaptopGuardian $env:VERSION" --notes-file dist/notes.md

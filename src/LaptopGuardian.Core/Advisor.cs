@@ -82,13 +82,15 @@ public static class Advisor
                 ? (resets == 1 ? "Your laptop reset itself without warning" : $"Your laptop reset itself {resets} times in two weeks")
                 : (unexplained.Count == 1 ? "Your laptop stopped without warning" : $"Your laptop stopped without warning {unexplained.Count} times in two weeks");
             string reading = unexplained.Select(c => c.Crash?.LastReading).FirstOrDefault(r => r != null) is FlightSample s
-                ? $" The last reading before the most recent one: {s.Describe()}"
+                ? $" Just before the latest one: {s.Describe()}"
                 : " LaptopGuardian now records temperatures and load every 10 seconds, so the next one will show what the laptop was doing.";
-            list.Add(new Recommendation("sudden-resets", Severity.Critical, title,
+            var rec = new Recommendation("sudden-resets", Severity.Critical, title,
                 "Windows recorded no error, which points to something below Windows: heat protection, the power system, memory, or a hardware fault." + reading +
                 " To narrow it down, use the laptop for a few hours without games or other heavy work. If that stops it, suspect heat or power under load: clear the vents, raise the back of the laptop, use a lower performance mode, and cap the frame rate. " +
                 "If it still happens, test the memory, then send the health report to your laptop maker's support.",
-                LinkLabel: "Test the memory", LinkUrl: "mdsched.exe"));
+                LinkLabel: "Test the memory", LinkUrl: "mdsched.exe");
+            // Whichever explains more of the recent crashes goes first.
+            if (unexplained.Count >= asleep14.Count) list.Insert(0, rec); else list.Add(rec);
         }
 
         // 2. BIOS: the usual fix for sleep and stability problems on laptops. Ask the maker when we can.
