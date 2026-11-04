@@ -82,7 +82,7 @@ Links and apps open only when you click them.
 
 ## Check the download
 
-Every release is built by GitHub Actions from the tagged source, not on anyone's PC. Its notes list the file's SHA-256 hash, and with the [GitHub CLI](https://cli.github.com/) you can confirm where it came from:
+Every release is built by GitHub Actions from the tagged source, not on anyone's PC. Its notes list the file's SHA-256 hash, and with the [GitHub CLI](https://cli.github.com/) (version 2.49 or newer) you can confirm where it came from:
 
 ```
 gh attestation verify LaptopGuardian.exe --repo Deaeath/LaptopGuardian
