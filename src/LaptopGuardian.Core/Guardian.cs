@@ -114,7 +114,13 @@ public sealed class Guardian : IDisposable
         // Full scan now, then every six hours (Windows Error Reporting retries on its own four-hour clock).
         _rescanTimer = new Timer(_ => Scan(), null, TimeSpan.FromSeconds(1), TimeSpan.FromHours(6));
         // Driver and BIOS updates: shortly after start (the history scan goes first), then daily.
-        _driverTimer = new Timer(_ => _ = CheckDriversAsync(), null, TimeSpan.FromSeconds(45), TimeSpan.FromHours(24));
+        // Once a day, counted across restarts: the Windows Update part keeps the processor busy for minutes,
+        // and an update or a restart must not set it off again.
+        var due = State.LastDriverCheck is DateTimeOffset last ? last.AddHours(24) - DateTimeOffset.Now : TimeSpan.Zero;
+        if (due < TimeSpan.FromSeconds(45)) due = TimeSpan.FromSeconds(45);
+        if (Drivers == null && State.LastDriverCheck is not null && due > TimeSpan.FromSeconds(45))
+            _ = Task.Run(async () => { await Task.Delay(TimeSpan.FromSeconds(45)); await CheckDriversAsync(skipWindowsUpdate: true); });
+        _driverTimer = new Timer(_ => _ = CheckDriversAsync(), null, due, TimeSpan.FromHours(24));
         // The flight recorder: a line every 10 seconds, so the next sudden reset leaves evidence.
         _recorderTimer = new Timer(_ => { try { RecordFlightSample(); } catch (Exception ex) { Debug.WriteLine(ex); } }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10));
         try { Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged; } catch (Exception ex) { Debug.WriteLine(ex); }
@@ -123,7 +129,7 @@ public sealed class Guardian : IDisposable
     int _checkingDrivers;
 
     /// <summary>Checks NVIDIA, Windows Update and the laptop maker for newer drivers and BIOS, and lists problem devices.</summary>
-    public async Task CheckDriversAsync()
+    public async Task CheckDriversAsync(bool skipWindowsUpdate = false)
     {
         if (Interlocked.Exchange(ref _checkingDrivers, 1) == 1) return;
         try
@@ -135,10 +141,19 @@ public sealed class Guardian : IDisposable
             Drivers = report;
             Recompute(); // everything but Windows Update, which can take minutes
 
-            var wuUpdates = await Task.Run(() => DriverChecks.WindowsUpdateDrivers(report.Notes));
-            report.Updates.AddRange(wuUpdates);
-            report.WindowsUpdateChecked = true;
-            State.LastDriverCheck = report.CheckedAt;
+            if (skipWindowsUpdate)
+            {
+                // A restart within the day: show the quick checks, keep yesterday's Windows Update result.
+                report.Notes.Add("Windows Update is checked once a day; the last check was " + Fmt.WhenInSentence(State.LastDriverCheck ?? report.CheckedAt) + ".");
+                report.WindowsUpdateChecked = true;
+            }
+            else
+            {
+                var wuUpdates = await Task.Run(() => DriverChecks.WindowsUpdateDrivers(report.Notes));
+                report.Updates.AddRange(wuUpdates);
+                report.WindowsUpdateChecked = true;
+                State.LastDriverCheck = report.CheckedAt;
+            }
 
             var fresh = report.Updates.Where(u => !State.AnnouncedDriverUpdates.Contains(u.Key)).ToList();
             State.AnnouncedDriverUpdates.AddRange(fresh.Select(u => u.Key));

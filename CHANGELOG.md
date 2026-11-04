@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.2
+
+### Fixed
+- **The driver check ran again after every restart and every update.** Its Windows Update part keeps the processor busy for minutes, which is the last thing a struggling laptop needs. It now runs once a day, counted across restarts.
+
 ## 2.2.1
 
 ### New
