@@ -71,7 +71,8 @@ internal static class Cli
         string path = Arg(args, "--write-icon") ?? "LaptopGuardian.ico";
         if (path.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
         {
-            using var png = IconFactory.Render(128, IconFactory.Calm);
+            int size = int.TryParse(Arg(args, "--size"), out int s) && s is >= 16 and <= 1024 ? s : 128;
+            using var png = IconFactory.Render(size, IconFactory.Calm);
             png.Save(path, System.Drawing.Imaging.ImageFormat.Png);
             return 0;
         }

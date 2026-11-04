@@ -101,7 +101,7 @@ dotnet test src\LaptopGuardian.Tests
 
 `LaptopGuardian.exe --diagnose --out report.md` runs a full scan without the window. `--screenshot <folder> [--dark|--light] [--sample] [--viewport]` renders every page to PNG off-screen; `--sample` uses the made-up data shown above.
 
-To release: raise the version in `src/Directory.Build.props`, add it to [CHANGELOG.md](CHANGELOG.md), commit, push, then push a tag `v<version>`.
+To release: raise the version in `src/Directory.Build.props` and add it to [CHANGELOG.md](CHANGELOG.md). For a showcase release page, also add `docs/releases/<version>.md` and its images (see [2.2.0](docs/releases/2.2.0.md); `tools/make-banner.ps1` and `tools/make-feature.ps1` draw them from `--sample` screenshots). Commit, push, then push a tag `v<version>`; GitHub Actions tests, builds, attests and publishes it, with notes from `tools/release-notes.ps1`.
 
 - `src/LaptopGuardian.Core`: everything that reads Windows and decides what it means. No UI.
 - `src/LaptopGuardian`: the WPF app: window, tray icon, notifications.
