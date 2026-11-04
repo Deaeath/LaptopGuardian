@@ -210,6 +210,7 @@ public partial class App : Application
                 for (int i = 0; i < 12; i++) { g.Gpu.SampleOnce(); Thread.Sleep(250); }
                 g.Scan();
             });
+            await g.CheckDriversAsync();
             var vm = new MainViewModel(g, Dispatcher);
             var w = new MainWindow(vm)
             {
