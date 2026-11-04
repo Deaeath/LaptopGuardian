@@ -15,8 +15,8 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       - name: Test
@@ -32,7 +32,7 @@ jobs:
           [IO.File]::WriteAllText('dist/LaptopGuardian.exe.sha256', "$hash  LaptopGuardian.exe`n")
           "HASH=$hash" >> $env:GITHUB_ENV
           "VERSION=$version" >> $env:GITHUB_ENV
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/LaptopGuardian.exe
       - name: Publish
