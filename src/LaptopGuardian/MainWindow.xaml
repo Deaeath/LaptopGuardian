@@ -1,0 +1,672 @@
+﻿<Window x:Class="LaptopGuardian.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:LaptopGuardian"
+        Title="LaptopGuardian"
+        Width="1140" Height="780" MinWidth="880" MinHeight="580"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource Bg}"
+        Foreground="{DynamicResource Text}"
+        FontFamily="{StaticResource UiFont}"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Ideal">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="Vis" />
+        <local:PageVisibility x:Key="Page" />
+        <local:HasValue x:Key="Has" />
+        <local:NotVisible x:Key="NotVis" />
+
+        <!-- One row in a list of incidents. -->
+        <DataTemplate x:Key="IncidentRow">
+            <Border BorderBrush="{DynamicResource Stroke}" BorderThickness="0,0,0,1" Padding="18,13">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Tint}" VerticalAlignment="Top">
+                        <TextBlock Style="{StaticResource Glyph}" Text="{Binding Glyph}" Foreground="{Binding Brush}" FontSize="15"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="14,0,16,0">
+                        <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding Summary}" Style="{StaticResource Small}" Margin="0,3,0,0" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" Text="{Binding When}" Style="{StaticResource Small}" VerticalAlignment="Top" TextWrapping="NoWrap" />
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <!-- An incident in the timeline, with a day heading when the day changes. -->
+        <DataTemplate x:Key="TimelineItem">
+            <StackPanel>
+                <TextBlock Text="{Binding Day}" Style="{StaticResource CardLabel}" Margin="2,18,0,8"
+                           Visibility="{Binding ShowDay, Converter={StaticResource Vis}}" />
+                <Border Style="{StaticResource Card}" Padding="18,14" Margin="0,0,0,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Tint}" VerticalAlignment="Top">
+                            <TextBlock Style="{StaticResource Glyph}" Text="{Binding Glyph}" Foreground="{Binding Brush}" FontSize="15"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Grid.Column="1" Margin="14,0,16,0">
+                            <TextBlock Text="{Binding Title}" FontSize="14.5" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding Summary}" Style="{StaticResource Body}" Foreground="{DynamicResource Muted}" Margin="0,3,0,0" />
+                            <TextBlock Text="{Binding Detail}" Style="{StaticResource Small}" Margin="0,8,0,0"
+                                       Visibility="{Binding Detail, Converter={StaticResource Has}}" />
+                            <TextBlock Text="{Binding Context}" Style="{StaticResource Small}" Foreground="{DynamicResource Text}" Margin="0,8,0,0"
+                                       Visibility="{Binding Context, Converter={StaticResource Has}}" />
+                            <TextBlock Text="{Binding Note}" Style="{StaticResource Small}" Foreground="{DynamicResource Text}" Margin="0,6,0,0"
+                                       Visibility="{Binding Note, Converter={StaticResource Has}}" />
+                            <TextBlock Text="{Binding Source}" Style="{StaticResource FaintText}" Margin="0,8,0,0"
+                                       Visibility="{Binding Source, Converter={StaticResource Has}}" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="2" Text="{Binding Clock}" Style="{StaticResource Small}" VerticalAlignment="Top" TextWrapping="NoWrap" />
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- A recommendation, with its action. -->
+        <DataTemplate x:Key="RecommendationCard">
+            <Border Style="{StaticResource Card}" Padding="0" Margin="0,0,0,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="4" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Background="{Binding Brush}" CornerRadius="10,0,0,10" />
+                    <Grid Grid.Column="1" Margin="18,16,12,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Style="{StaticResource Glyph}" Text="{Binding Glyph}" Foreground="{Binding Brush}" FontSize="18" Margin="0,1,14,0" VerticalAlignment="Top" />
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="{Binding Title}" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding Body}" Style="{StaticResource Body}" Foreground="{DynamicResource Muted}" Margin="0,5,0,0" />
+                            <WrapPanel Margin="0,12,0,0">
+                                <Button Style="{StaticResource AccentButton}" Content="{Binding ActionLabel}" Command="{Binding ActCommand}"
+                                        IsEnabled="{Binding NotBusy}" Margin="0,0,10,0"
+                                        Visibility="{Binding HasAction, Converter={StaticResource Vis}}" />
+                                <Button Style="{StaticResource SubtleButton}" Command="{Binding LinkCommand}" Margin="0,0,10,0"
+                                        Visibility="{Binding HasLink, Converter={StaticResource Vis}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="{Binding LinkLabel}" />
+                                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE8A7;" FontSize="12" Margin="8,0,0,0" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                            </WrapPanel>
+                        </StackPanel>
+                        <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="&#xE711;" ToolTip="Hide this suggestion"
+                                Command="{Binding DismissCommand}" VerticalAlignment="Top" Margin="8,-4,0,0" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </DataTemplate>
+
+        <!-- An unexpected shutdown, told as a short story. -->
+        <DataTemplate x:Key="CrashCard">
+            <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Tint}">
+                            <TextBlock Style="{StaticResource Glyph}" Text="&#xE7E8;" Foreground="{Binding Brush}" FontSize="15"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" Margin="14,0,0,0" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" Text="{Binding When}" Style="{StaticResource Small}" VerticalAlignment="Center" />
+                    </Grid>
+                    <TextBlock Text="{Binding Summary}" Style="{StaticResource Body}" Margin="0,12,0,0" />
+                    <ItemsControl ItemsSource="{Binding Steps}" Margin="0,14,0,0">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{DynamicResource SurfaceSunken}" CornerRadius="8" Padding="12,8" Margin="0,0,8,8">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Ellipse Width="8" Height="8" Fill="{Binding Brush}" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding Time}" FontWeight="SemiBold" FontSize="13.5" Margin="8,0,6,0" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding Label}" Style="{StaticResource Small}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="{Binding Facts}" Style="{StaticResource Small}" Margin="0,4,0,0" Visibility="{Binding Facts, Converter={StaticResource Has}}" />
+                    <TextBlock Text="{Binding Detail}" Style="{StaticResource Small}" Margin="0,10,0,0" Visibility="{Binding Detail, Converter={StaticResource Has}}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                        <TextBlock Text="What did you see?" Style="{StaticResource Small}" Foreground="{DynamicResource Text}" VerticalAlignment="Center" Margin="0,0,12,0" />
+                        <ComboBox ItemsSource="{Binding AnswerOptions}" SelectedItem="{Binding Note, Mode=TwoWay}" MinWidth="260" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="236" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- ============================================================ navigation -->
+        <Border Background="{DynamicResource Nav}" BorderBrush="{DynamicResource Stroke}" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="22,24,16,22">
+                    <Image Source="{Binding AppIcon}" Width="30" Height="30" RenderOptions.BitmapScalingMode="HighQuality" />
+                    <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="LaptopGuardian" FontSize="15.5" FontWeight="SemiBold" />
+                        <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                            <Ellipse Width="7" Height="7" Fill="{Binding StatusBrush}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding StatusHeadline}" FontSize="12" Foreground="{DynamicResource Muted}" Margin="6,0,0,0" />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel DockPanel.Dock="Bottom" Margin="18,8,18,20">
+                    <Button Style="{StaticResource SubtleButton}" Command="{Binding CopyReportCommand}" HorizontalAlignment="Stretch">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{StaticResource Glyph}" Text="&#xE8C8;" FontSize="14" VerticalAlignment="Center" />
+                            <TextBlock Text="Copy health report" Margin="9,0,0,0" />
+                        </StackPanel>
+                    </Button>
+                    <TextBlock Text="{Binding LastScanText}" Style="{StaticResource FaintText}" Margin="2,10,0,0" />
+                </StackPanel>
+
+                <ListBox ItemsSource="{Binding Nav}" SelectedItem="{Binding SelectedNav}" ItemContainerStyle="{StaticResource NavItem}"
+                         Background="Transparent" BorderThickness="0" Padding="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Glyph}" Text="{Binding Glyph}" FontSize="16" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Label}" FontSize="14" Margin="13,0,0,0" VerticalAlignment="Center" Foreground="{DynamicResource Text}" />
+                                <Border Background="{DynamicResource BadTint}" CornerRadius="8" Padding="7,1" Margin="9,0,0,0" VerticalAlignment="Center"
+                                        Visibility="{Binding Badge, Converter={StaticResource Has}}">
+                                    <TextBlock Text="{Binding Badge}" FontSize="11.5" FontWeight="SemiBold" Foreground="{DynamicResource Bad}" />
+                                </Border>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <!-- ============================================================ pages -->
+        <Grid Grid.Column="1">
+            <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" PanningMode="VerticalOnly">
+                <Grid Margin="40,32,40,40" MaxWidth="1020">
+
+                    <!-- ======================== Overview -->
+                    <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=overview}">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Overview" />
+                        <TextBlock Style="{StaticResource PageLead}" Text="{Binding MachineLine}" />
+
+                        <Border Background="{Binding StatusTint}" BorderBrush="{Binding StatusBrush}" BorderThickness="1" CornerRadius="10" Padding="22,18">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource Glyph}" Text="{Binding StatusGlyph}" FontSize="28" Foreground="{Binding StatusBrush}" VerticalAlignment="Center" />
+                                <StackPanel Grid.Column="1" Margin="18,0,16,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding StatusHeadline}" FontSize="19" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding StatusSummary}" Style="{StaticResource Body}" Foreground="{DynamicResource Muted}" Margin="0,3,0,0" />
+                                </StackPanel>
+                                <Button Grid.Column="2" Style="{StaticResource SubtleButton}" Command="{Binding RescanCommand}" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" />
+                                        <TextBlock Text="Check again" Margin="8,0,0,0" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+                        </Border>
+
+                        <UniformGrid Columns="3" Margin="-7,14,-7,0">
+                            <!-- Graphics card -->
+                            <Border Style="{StaticResource Card}" Margin="7">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource CardLabel}" Text="Graphics card" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <TextBlock Style="{StaticResource Big}" Text="{Binding GpuTempText}" Foreground="{Binding GpuTempBrush}" />
+                                        <TextBlock Style="{StaticResource Small}" Text="{Binding GpuLimitText}" VerticalAlignment="Bottom" Margin="10,0,0,10" />
+                                    </StackPanel>
+                                    <local:Sparkline Values="{Binding TempSeries}" Minimum="30" Maximum="100" Slots="60" Stroke="{Binding GpuTempBrush}" Height="34" Margin="0,4,0,12" />
+                                    <DockPanel LastChildFill="False">
+                                        <TextBlock DockPanel.Dock="Left" Text="Load" Style="{StaticResource Small}" />
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding GpuUtilText}" FontSize="12.5" FontWeight="SemiBold" />
+                                    </DockPanel>
+                                    <ProgressBar Style="{StaticResource Meter}" Value="{Binding GpuUtil, Mode=OneWay}" Margin="0,5,0,11" />
+                                    <DockPanel LastChildFill="False">
+                                        <TextBlock DockPanel.Dock="Left" Text="Memory" Style="{StaticResource Small}" />
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding GpuMemText}" FontSize="12.5" FontWeight="SemiBold" />
+                                    </DockPanel>
+                                    <ProgressBar Style="{StaticResource Meter}" Value="{Binding GpuMem, Mode=OneWay}" Foreground="{Binding GpuMemBrush}" Margin="0,5,0,0" />
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding GpuAppsText}" Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Stability -->
+                            <Border Style="{StaticResource Card}" Margin="7">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource CardLabel}" Text="Stability this week" />
+                                    <Grid Margin="0,6,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition />
+                                            <ColumnDefinition />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Style="{StaticResource Big}" Text="{Binding Shutdowns7}" Foreground="{Binding Shutdowns7Brush}" />
+                                            <TextBlock Style="{StaticResource Small}" Text="unexpected shutdowns" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Style="{StaticResource Big}" Text="{Binding Graphics7}" Foreground="{Binding Graphics7Brush}" />
+                                            <TextBlock Style="{StaticResource Small}" Text="graphics errors" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding Stability30}" Margin="0,16,0,0" />
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding LastShutdownText}" Margin="0,4,0,0" />
+                                    <Button Style="{StaticResource LinkButton}" Content="See every shutdown" Command="{Binding NavigateCommand}" CommandParameter="shutdowns"
+                                            HorizontalAlignment="Left" Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Battery -->
+                            <Border Style="{StaticResource Card}" Margin="7">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource CardLabel}" Text="Battery" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <TextBlock Style="{StaticResource Big}" Text="{Binding BatteryPctText}" />
+                                        <TextBlock Style="{StaticResource Small}" Text="{Binding BatterySourceText}" VerticalAlignment="Bottom" Margin="10,0,0,10" />
+                                    </StackPanel>
+                                    <DockPanel LastChildFill="False" Margin="0,16,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Health" Style="{StaticResource Small}" />
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding BatteryHealthText}" FontSize="12.5" FontWeight="SemiBold" />
+                                    </DockPanel>
+                                    <ProgressBar Style="{StaticResource Meter}" Value="{Binding BatteryHealth, Mode=OneWay}" Foreground="{Binding BatteryHealthBrush}" Margin="0,5,0,0" />
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding BatteryDetailText}" Margin="0,12,0,0" />
+                                    <Button Style="{StaticResource LinkButton}" Content="Power and sleep settings" Command="{Binding NavigateCommand}" CommandParameter="power"
+                                            HorizontalAlignment="Left" Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Border>
+                        </UniformGrid>
+
+                        <TextBlock Style="{StaticResource Section}" Text="What to do" Visibility="{Binding Recommendations, Converter={StaticResource Has}}" />
+                        <ItemsControl ItemsSource="{Binding Recommendations}" ItemTemplate="{StaticResource RecommendationCard}" />
+
+                        <DockPanel Margin="0,0,0,0">
+                            <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="Open the timeline" Command="{Binding NavigateCommand}" CommandParameter="timeline"
+                                    VerticalAlignment="Bottom" Margin="0,0,0,12" />
+                            <TextBlock Style="{StaticResource Section}" Text="Recent problems" />
+                        </DockPanel>
+                        <Border Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                            <Grid>
+                                <ItemsControl ItemsSource="{Binding Recent}" ItemTemplate="{StaticResource IncidentRow}" Margin="0,0,0,-1" />
+                                <TextBlock Text="Nothing to report." Style="{StaticResource Small}" Margin="20,16"
+                                           Visibility="{Binding Recent, Converter={StaticResource Has}, ConverterParameter=inverse}" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ======================== Timeline -->
+                    <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=timeline}">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Timeline" />
+                        <TextBlock Style="{StaticResource PageLead}" Text="Everything LaptopGuardian has found, newest first: unexpected shutdowns, graphics and hardware errors, and the alerts it raised. Each one is recorded once, however many times Windows logged it." />
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Show" Style="{StaticResource Small}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                            <ComboBox ItemsSource="{Binding TimelineFilters}" SelectedItem="{Binding TimelineFilter, Mode=TwoWay}" MinWidth="180" />
+                        </StackPanel>
+                        <ItemsControl ItemsSource="{Binding Timeline}" ItemTemplate="{StaticResource TimelineItem}" Margin="0,6,0,0" />
+                    </StackPanel>
+
+                    <!-- ======================== Shutdowns -->
+                    <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=shutdowns}">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Unexpected shutdowns" />
+                        <TextBlock Style="{StaticResource PageLead}" Text="When Windows stops without shutting down properly, it records the last moment it was alive, whether it was asleep, and whether the power button was pressed. LaptopGuardian reads that record and the battery report to tell you what most likely happened." />
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+                            <TextBlock Text="{Binding CrashSummary}" Style="{StaticResource Body}" />
+                        </Border>
+                        <ItemsControl ItemsSource="{Binding Crashes}" ItemTemplate="{StaticResource CrashCard}" />
+                    </StackPanel>
+
+                    <!-- ======================== Graphics -->
+                    <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=graphics}">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Graphics" />
+                        <TextBlock Style="{StaticResource PageLead}" Text="{Binding GpuDriverText}" />
+
+                        <Border Style="{StaticResource Card}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="28" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource CardLabel}" Text="Temperature, last 15 minutes" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <TextBlock Style="{StaticResource Big}" Text="{Binding GpuTempText}" Foreground="{Binding GpuTempBrush}" />
+                                        <TextBlock Style="{StaticResource Small}" Text="{Binding GpuLimitText}" VerticalAlignment="Bottom" Margin="10,0,0,10" />
+                                    </StackPanel>
+                                    <local:Sparkline Values="{Binding TempSeries}" Minimum="30" Maximum="100" Slots="240" Stroke="{Binding GpuTempBrush}" Height="70" Margin="0,8,0,0" />
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding GpuThrottleText}" Foreground="{Binding GpuThrottleBrush}" Margin="0,8,0,0"
+                                               Visibility="{Binding GpuThrottleText, Converter={StaticResource Has}}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <DockPanel LastChildFill="False">
+                                        <TextBlock DockPanel.Dock="Left" Text="Load" Style="{StaticResource CardLabel}" />
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding GpuUtilText}" FontWeight="SemiBold" />
+                                    </DockPanel>
+                                    <local:Sparkline Values="{Binding UtilSeries}" Minimum="0" Maximum="100" Slots="240" Stroke="{DynamicResource Accent}" Height="40" Margin="0,6,0,14" />
+                                    <DockPanel LastChildFill="False">
+                                        <TextBlock DockPanel.Dock="Left" Text="Memory" Style="{StaticResource CardLabel}" />
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding GpuMemText}" FontWeight="SemiBold" />
+                                    </DockPanel>
+                                    <local:Sparkline Values="{Binding MemSeries}" Minimum="0" Maximum="100" Slots="240" Stroke="{Binding GpuMemBrush}" Height="40" Margin="0,6,0,14" />
+                                    <DockPanel LastChildFill="False">
+                                        <TextBlock DockPanel.Dock="Left" Text="Power" Style="{StaticResource CardLabel}" />
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding GpuPowerText}" FontWeight="SemiBold" />
+                                    </DockPanel>
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding GpuAppsText}" Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource Section}" Text="Graphics and hardware errors" />
+                        <Border Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                            <Grid>
+                                <ItemsControl ItemsSource="{Binding GraphicsErrors}" ItemTemplate="{StaticResource IncidentRow}" Margin="0,0,0,-1" />
+                                <TextBlock Text="None in the last 60 days." Style="{StaticResource Small}" Margin="20,16"
+                                           Visibility="{Binding GraphicsErrors, Converter={StaticResource Has}, ConverterParameter=inverse}" />
+                            </Grid>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource Section}" Text="Windows crash reports" />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Text="{Binding KernelSummary}" Style="{StaticResource Body}" />
+                                <Button Style="{StaticResource AccentButton}" Content="Clear the stuck reports" Command="{Binding ApplyCommand}" CommandParameter="clear-reports"
+                                        HorizontalAlignment="Left" Margin="0,14,0,4" Visibility="{Binding HasStuckReports, Converter={StaticResource Vis}}" />
+                                <ItemsControl ItemsSource="{Binding KernelReports}" Margin="0,10,0,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="0,10,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <Ellipse Width="8" Height="8" Fill="{Binding Brush}" VerticalAlignment="Top" Margin="0,6,12,0" />
+                                                <StackPanel Grid.Column="1">
+                                                    <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14" />
+                                                    <TextBlock Text="{Binding Line}" Style="{StaticResource Small}" Margin="0,2,0,0" />
+                                                    <TextBlock Text="{Binding Meaning}" Style="{StaticResource FaintText}" Margin="0,2,0,0" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ======================== Power & battery -->
+                    <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=power}">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Power and battery" />
+                        <TextBlock Style="{StaticResource PageLead}" Text="{Binding SleepModeText}" />
+
+                        <UniformGrid Columns="2" Margin="-7,0,-7,0">
+                            <Border Style="{StaticResource Card}" Margin="7">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource CardLabel}" Text="Battery health" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <TextBlock Style="{StaticResource Big}" Text="{Binding BatteryHealthText}" Foreground="{Binding BatteryHealthBrush}" />
+                                        <TextBlock Style="{StaticResource Small}" Text="of its original capacity" VerticalAlignment="Bottom" Margin="10,0,0,10" />
+                                    </StackPanel>
+                                    <ProgressBar Style="{StaticResource Meter}" Value="{Binding BatteryHealth, Mode=OneWay}" Foreground="{Binding BatteryHealthBrush}" Margin="0,10,0,0" />
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding BatteryDetailText}" Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Card}" Margin="7">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource CardLabel}" Text="Charge now" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                        <TextBlock Style="{StaticResource Big}" Text="{Binding BatteryPctText}" />
+                                        <TextBlock Style="{StaticResource Small}" Text="{Binding BatterySourceText}" VerticalAlignment="Bottom" Margin="10,0,0,10" />
+                                    </StackPanel>
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding PowerPlanText}" Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Border>
+                        </UniformGrid>
+
+                        <TextBlock Style="{StaticResource Section}" Text="Sleep and hibernate" />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="1" Text="Plugged in" Style="{StaticResource CardLabel}" />
+                                    <TextBlock Grid.Column="2" Text="On battery" Style="{StaticResource CardLabel}" />
+                                </Grid>
+                                <ItemsControl ItemsSource="{Binding PowerRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{DynamicResource Stroke}" BorderThickness="0,1,0,0" Padding="0,10">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="2*" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding Label}" FontSize="14" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding Plugged}" FontSize="14" FontWeight="SemiBold" />
+                                                    <TextBlock Grid.Column="2" Text="{Binding Battery}" FontSize="14" FontWeight="SemiBold" />
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock Style="{StaticResource Small}" Margin="0,12,0,0"
+                                           Text="If the laptop dies or will not wake while asleep, hibernating is the safer choice: it saves everything to disk and powers off completely, so there is nothing to wake up. These changes apply to the current power plan, and you can change them back in Windows' power settings." />
+                                <WrapPanel Margin="0,14,0,0">
+                                    <Button Style="{StaticResource AccentButton}" Content="Hibernate after 20 minutes of sleep" Command="{Binding ApplyCommand}" CommandParameter="hibernate-after-sleep" Margin="0,0,10,8" />
+                                    <Button Style="{StaticResource SubtleButton}" Content="Hibernate when I close the lid" Command="{Binding ApplyCommand}" CommandParameter="lid-hibernate" Margin="0,0,10,8" />
+                                    <Button Style="{StaticResource SubtleButton}" Content="Open Windows' sleep study" Command="{Binding ApplyCommand}" CommandParameter="sleep-study" Margin="0,0,10,8"
+                                            ToolTip="A detailed report of every sleep in the last 7 days. Windows asks for permission to create it." />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ======================== Drivers -->
+                    <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=drivers}">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Drivers" />
+                        <TextBlock Style="{StaticResource PageLead}" Text="LaptopGuardian compares what is installed with NVIDIA's latest driver, Windows Update's driver catalog, and your laptop maker's BIOS list. It checks once a day." />
+
+                        <Border Style="{StaticResource Card}">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Style="{StaticResource SubtleButton}" Command="{Binding CheckDriversCommand}" VerticalAlignment="Top" Margin="16,0,0,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" />
+                                        <TextBlock Text="Check now" Margin="8,0,0,0" />
+                                    </StackPanel>
+                                </Button>
+                                <StackPanel>
+                                    <TextBlock Text="{Binding DriverStatus}" Style="{StaticResource Body}" />
+                                    <TextBlock Text="{Binding BiosLine}" Style="{StaticResource Small}" Margin="0,6,0,0" Visibility="{Binding BiosLine, Converter={StaticResource Has}}" />
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource Section}" Text="Updates available" Visibility="{Binding DriverUpdates, Converter={StaticResource Has}}" />
+                        <ItemsControl ItemsSource="{Binding DriverUpdates}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource Card}" Padding="20,14" Margin="0,0,0,8">
+                                        <DockPanel>
+                                            <Button DockPanel.Dock="Right" Style="{StaticResource AccentButton}" Content="{Binding ButtonLabel}" Command="{Binding Command}" VerticalAlignment="Center" Margin="16,0,0,0" />
+                                            <Ellipse DockPanel.Dock="Left" Width="8" Height="8" Fill="{Binding Brush}" VerticalAlignment="Top" Margin="0,7,12,0" />
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding Line}" Style="{StaticResource Small}" Margin="0,2,0,0" />
+                                            </StackPanel>
+                                        </DockPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Style="{StaticResource Section}" Text="Devices with problems" Visibility="{Binding ProblemDevices, Converter={StaticResource Has}}" />
+                        <ItemsControl ItemsSource="{Binding ProblemDevices}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource Card}" Padding="20,14" Margin="0,0,0,8">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding Meaning}" Style="{StaticResource Small}" Margin="0,2,0,0" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Style="{StaticResource Section}" Text="Installed drivers" Visibility="{Binding InstalledDrivers, Converter={StaticResource Has}}" />
+                        <Border Style="{StaticResource Card}" Visibility="{Binding InstalledDrivers, Converter={StaticResource Has}}">
+                            <ItemsControl ItemsSource="{Binding InstalledDrivers}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border BorderBrush="{DynamicResource Stroke}" BorderThickness="0,0,0,1" Padding="0,8">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="90" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="170" />
+                                                    <ColumnDefinition Width="80" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="{Binding Category}" Style="{StaticResource Small}" />
+                                                <TextBlock Grid.Column="1" Text="{Binding Device}" FontSize="13.5" TextWrapping="Wrap" Margin="0,0,12,0" />
+                                                <TextBlock Grid.Column="2" Text="{Binding Version}" Style="{StaticResource Small}" />
+                                                <TextBlock Grid.Column="3" Text="{Binding Date}" Style="{StaticResource Small}" HorizontalAlignment="Right" />
+                                            </Grid>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ======================== Keyboard -->
+                    <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=keyboard}">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Keyboard" />
+                        <TextBlock Style="{StaticResource PageLead}" Text="A worn key can register one press as two, so letters come out doubled. LaptopGuardian swallows a second press of the same key that arrives too soon after the first. Holding a key down still repeats normally, and keys sent by other programs are never touched." />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <CheckBox Style="{StaticResource Switch}" Content="Block accidental repeated key presses" IsChecked="{Binding KeyboardFilter, Mode=TwoWay}" />
+                                <StackPanel Orientation="Horizontal" Margin="0,16,0,0" IsEnabled="{Binding KeyboardFilter}">
+                                    <TextBlock Text="Sensitivity" Style="{StaticResource Small}" Foreground="{DynamicResource Text}" VerticalAlignment="Center" Margin="0,0,12,0" />
+                                    <ComboBox ItemsSource="{Binding Thresholds}" DisplayMemberPath="Label" SelectedValuePath="Ms"
+                                              SelectedValue="{Binding KeyboardThreshold, Mode=TwoWay}" MinWidth="200" />
+                                </StackPanel>
+                                <TextBlock Style="{StaticResource Small}" Margin="0,14,0,0"
+                                           Text="Stronger settings catch more doubled letters, but can swallow a letter you really meant to type twice quickly. Normal suits most keyboards." />
+                                <TextBlock Style="{StaticResource Body}" Text="{Binding KeyboardStats}" Margin="0,14,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ======================== Settings -->
+                    <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=settings}">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Settings" />
+                        <TextBlock Style="{StaticResource PageLead}" Text="LaptopGuardian runs quietly in the notification area and only speaks up when something new happens." />
+
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource CardLabel}" Text="Startup" Margin="0,0,0,10" />
+                                <CheckBox Style="{StaticResource Switch}" Content="Start LaptopGuardian when I sign in" IsChecked="{Binding StartWithWindows, Mode=TwoWay}" />
+                                <CheckBox Style="{StaticResource Switch}" Content="Update LaptopGuardian automatically" IsChecked="{Binding AutoUpdate, Mode=TwoWay}" />
+                                <DockPanel Margin="0,8,0,0">
+                                    <Button DockPanel.Dock="Left" Style="{StaticResource SubtleButton}" Content="Check for updates" Command="{Binding CheckUpdatesCommand}" Margin="0,0,12,0" />
+                                    <TextBlock Text="{Binding UpdateStatus}" Style="{StaticResource Small}" VerticalAlignment="Center" />
+                                </DockPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource CardLabel}" Text="Tell me when" Margin="0,0,0,10" />
+                                <CheckBox Style="{StaticResource Switch}" Content="The laptop shut down unexpectedly" IsChecked="{Binding NotifyCrashes, Mode=TwoWay}" />
+                                <CheckBox Style="{StaticResource Switch}" Content="The graphics driver reports an error" IsChecked="{Binding NotifyGraphics, Mode=TwoWay}" />
+                                <CheckBox Style="{StaticResource Switch}" Content="The graphics card stays at its temperature limit" IsChecked="{Binding NotifyHeat, Mode=TwoWay}" />
+                                <CheckBox Style="{StaticResource Switch}" Content="Graphics memory is nearly full" IsChecked="{Binding NotifyMemory, Mode=TwoWay}" />
+                                <CheckBox Style="{StaticResource Switch}" Content="The battery is low" IsChecked="{Binding NotifyBattery, Mode=TwoWay}" />
+                                <CheckBox Style="{StaticResource Switch}" Content="The hardware reports a serious error" IsChecked="{Binding NotifyHardware, Mode=TwoWay}" />
+                                <CheckBox Style="{StaticResource Switch}" Content="A newer driver or BIOS is available" IsChecked="{Binding NotifyDriverUpdates, Mode=TwoWay}" />
+                                <Button Style="{StaticResource SubtleButton}" Content="Send a test notification" Command="{Binding TestNotificationCommand}" HorizontalAlignment="Left" Margin="0,12,0,0" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,12">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource CardLabel}" Text="Health report" Margin="0,0,0,8" />
+                                <TextBlock Style="{StaticResource Small}" Text="A plain-text summary of this laptop, its crashes and errors, and what to do. Useful for the laptop maker's support." />
+                                <WrapPanel Margin="0,12,0,0">
+                                    <Button Style="{StaticResource SubtleButton}" Content="Copy to clipboard" Command="{Binding CopyReportCommand}" Margin="0,0,10,0" />
+                                    <Button Style="{StaticResource SubtleButton}" Content="Save as a file..." Command="{Binding SaveReportCommand}" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource CardLabel}" Text="About" Margin="0,0,0,8" />
+                                <TextBlock Style="{StaticResource Body}">
+                                    <Run Text="LaptopGuardian " /><Run Text="{Binding Version, Mode=OneWay}" />
+                                </TextBlock>
+                                <TextBlock Style="{StaticResource Small}" Margin="0,4,0,0">
+                                    <Run Text="Installed in " /><Run Text="{Binding InstallFolder, Mode=OneWay}" />
+                                </TextBlock>
+                                <Button Style="{StaticResource LinkButton}" Command="{Binding OpenDataFolderCommand}" HorizontalAlignment="Left" Margin="0,8,0,0">
+                                    <TextBlock>
+                                        <Run Text="Open the data folder (" /><Run Text="{Binding DataFolder, Mode=OneWay}" /><Run Text=")" />
+                                    </TextBlock>
+                                </Button>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+
+            <!-- Result of an action. -->
+            <Border VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="24" MaxWidth="660"
+                    Padding="16,12" CornerRadius="10" Background="{DynamicResource Surface}" BorderBrush="{Binding MessageBrush}" BorderThickness="1"
+                    Visibility="{Binding Message, Converter={StaticResource Has}}">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="22" ShadowDepth="3" Opacity="0.28" />
+                </Border.Effect>
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Left" Style="{StaticResource Glyph}" Text="{Binding MessageGlyph}" Foreground="{Binding MessageBrush}" VerticalAlignment="Center" Margin="0,0,12,0" />
+                    <Button DockPanel.Dock="Right" Style="{StaticResource IconButton}" Content="&#xE711;" Command="{Binding DismissMessageCommand}" Margin="12,0,0,0" />
+                    <TextBlock Text="{Binding Message}" TextWrapping="Wrap" VerticalAlignment="Center" FontSize="14" />
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>
