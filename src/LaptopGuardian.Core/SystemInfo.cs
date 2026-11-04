@@ -12,10 +12,24 @@ public sealed record SystemSnapshot
     public string BiosVersion { get; init; } = "";
     public DateTime? BiosDate { get; init; }
     public string Windows { get; init; } = "";
+    public string Cpu { get; init; } = "";
     public List<GraphicsAdapter> Adapters { get; init; } = new();
 
     public string ShortModel => Model.Contains('_') ? Model[..Model.IndexOf('_')] : Model;
     public bool IsAsus => Manufacturer.Contains("ASUS", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The name people use: "ASUSTeK COMPUTER INC." is ASUS, "HP Inc." is HP.</summary>
+    public string Maker
+    {
+        get
+        {
+            if (IsAsus) return "ASUS";
+            string m = Manufacturer;
+            foreach (var tail in new[] { " COMPUTER INC.", " Inc.", " Inc", " Corporation", " Corp.", " Co., Ltd.", " LLC", " Ltd." })
+                if (m.EndsWith(tail, StringComparison.OrdinalIgnoreCase)) m = m[..^tail.Length];
+            return m.Trim();
+        }
+    }
     public GraphicsAdapter? Discrete =>
         Adapters.Where(a => a.Vendor is "NVIDIA" or "AMD" && (a.MemoryGB ?? 0) >= 2).OrderByDescending(a => a.MemoryGB).FirstOrDefault()
         ?? Adapters.OrderByDescending(a => a.MemoryGB).FirstOrDefault();
@@ -37,8 +51,15 @@ public static class SystemInfo
             BiosVersion = Clean(bios?.GetValue("BIOSVersion") as string),
             BiosDate = ParseDate(bios?.GetValue("BIOSReleaseDate") as string),
             Windows = WindowsName(nt),
+            Cpu = Cpu(),
             Adapters = Adapters(),
         };
+    }
+
+    static string Cpu()
+    {
+        using var k = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0");
+        return Clean(k?.GetValue("ProcessorNameString") as string);
     }
 
     static string WindowsName(RegistryKey? nt)
@@ -78,7 +99,7 @@ public static class SystemInfo
                 string vendor = match.Contains("VEN_10DE") || name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) ? "NVIDIA"
                     : match.Contains("VEN_1002") || name.Contains("AMD", StringComparison.OrdinalIgnoreCase) || name.Contains("Radeon", StringComparison.OrdinalIgnoreCase) ? "AMD"
                     : match.Contains("VEN_8086") || name.Contains("Intel", StringComparison.OrdinalIgnoreCase) ? "Intel" : "Other";
-                list.Add(new GraphicsAdapter(name.Trim(), ver, vendor == "NVIDIA" ? NvidiaVersion(ver) : null,
+                list.Add(new GraphicsAdapter(name.Trim(), ver, vendor == "NVIDIA" ? NvidiaVersion(ver) : vendor == "AMD" ? k.GetValue("RadeonSoftwareVersion") as string : null,
                     ParseDate(k.GetValue("DriverDate") as string), mem is double m ? Math.Round(m, 1) : null, vendor));
             }
             catch { }

@@ -46,7 +46,7 @@ public partial class App : Application
                 var latest = await AppUpdater.LatestAsync();
                 if (latest == null || latest.Version <= AppUpdater.Current)
                 {
-                    Dispatcher.Invoke(() => _vm.UpdateStatus = $"Up to date (version {AppUpdater.Current}). Checked {Fmt.When(DateTimeOffset.Now).ToLowerInvariant()}.");
+                    Dispatcher.Invoke(() => _vm.UpdateStatus = $"Up to date (version {AppUpdater.Current}). Checked {Fmt.WhenInSentence(DateTimeOffset.Now)}.");
                     return;
                 }
                 Dispatcher.Invoke(() => _vm.UpdateStatus = $"Downloading version {latest.Version}...");
@@ -58,6 +58,11 @@ public partial class App : Application
                 _vm.UpdateStatus = $"Version {_stagedVersion} is ready. It installs when this window closes.";
                 TryApplyUpdate();
             });
+        }
+        catch (Exception ex) when (ex is System.Net.Http.HttpRequestException or TaskCanceledException)
+        {
+            // Being offline is normal, not an error to log every twelve hours.
+            Dispatcher.Invoke(() => _vm.UpdateStatus = "Could not reach GitHub to check for updates. It will try again later.");
         }
         catch (Exception ex)
         {
@@ -126,7 +131,7 @@ public partial class App : Application
         AppUpdater.CleanUp(exe);
         if (Installer.IsInstalledCopy(exe)) Installer.Register(exe!);
         if (UpdatedFrom != null)
-            Notifier.Show(new Alert(IncidentKind.GraphicsError, Severity.Info, $"LaptopGuardian updated to {AppUpdater.Current}", $"It was {UpdatedFrom}. Nothing else changed.", "settings"));
+            Notifier.Show(new Alert(IncidentKind.GraphicsError, Severity.Info, $"LaptopGuardian updated to {AppUpdater.Current}", $"It was {UpdatedFrom}. Your settings and history are unchanged.", "settings"));
         _vm.CheckForUpdatesRequested += () => _ = CheckForUpdateAsync(manual: true);
         _updateTimer = new Timer(_ => _ = CheckForUpdateAsync(manual: false), null, TimeSpan.FromMinutes(1), TimeSpan.FromHours(12));
     }
@@ -264,7 +269,9 @@ public partial class App : Application
         try
         {
             Directory.CreateDirectory(Guardian.DefaultDataDir);
-            File.AppendAllText(Path.Combine(Guardian.DefaultDataDir, "error.log"), $"[{DateTime.Now:s}] {ex}{Environment.NewLine}");
+            string path = Path.Combine(Guardian.DefaultDataDir, "error.log");
+            if (File.Exists(path) && new FileInfo(path).Length > 1024 * 1024) File.Move(path, path + ".1", overwrite: true);
+            File.AppendAllText(path, $"[{DateTime.Now:s}] {ex}{Environment.NewLine}");
         }
         catch { }
     }

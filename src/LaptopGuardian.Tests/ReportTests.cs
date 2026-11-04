@@ -48,7 +48,7 @@ public class WerReportsTests
         File.WriteAllText(victim, "x");
         try
         {
-            var r = new KernelReport { ReportId = "x", QueueFolder = tmp, DumpFiles = new() { victim }, Stuck = true };
+            var r = new KernelReport { ReportId = "x", QueueFolder = tmp, DumpFiles = new() { victim } };
             var (n, files, _, _) = WerReports.Clear(new[] { r });
             Assert.Equal(0, n);
             Assert.Equal(0, files);

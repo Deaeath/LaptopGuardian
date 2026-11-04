@@ -81,26 +81,60 @@ public static class PowerConfig
     }
 
     /// <summary>Sleep turns into hibernation after <paramref name="seconds"/> asleep, plugged in and on battery.</summary>
-    public static uint SetHibernateAfter(uint seconds) =>
-        Write(SubSleep, HibernateIdle, seconds, seconds);
+    public static uint SetHibernateAfter(uint seconds, bool bestEffort = false) =>
+        Write(SubSleep, HibernateIdle, seconds, seconds, bestEffort);
 
     /// <summary>Closing the lid and pressing the power button hibernate instead of sleeping.</summary>
-    public static uint SetLidAndButtonToHibernate()
+    public static uint SetLidAndButtonToHibernate(bool bestEffort = false)
     {
-        uint a = Write(SubButtons, LidAction, ActionHibernate, ActionHibernate);
-        uint b = Write(SubButtons, PowerButtonAction, ActionHibernate, ActionHibernate);
+        uint a = Write(SubButtons, LidAction, ActionHibernate, ActionHibernate, bestEffort);
+        uint b = Write(SubButtons, PowerButtonAction, ActionHibernate, ActionHibernate, bestEffort);
         return a != 0 ? a : b;
     }
 
-    static uint Write(Guid sub, Guid setting, uint ac, uint dc)
+    /// <summary>Every power plan on this PC.</summary>
+    public static List<Guid> Schemes()
+    {
+        const uint AccessScheme = 16;
+        var list = new List<Guid>();
+        for (uint i = 0; i < 64; i++)
+        {
+            var buffer = new byte[16];
+            uint size = 16;
+            if (PowerEnumerate(IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, AccessScheme, i, buffer, ref size) != 0) break;
+            list.Add(new Guid(buffer));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Writes to every power plan, not only the active one: laptop utilities such as Armoury Crate switch
+    /// plans with their performance modes, and a fix made to one plan would silently stop applying.
+    /// With <paramref name="bestEffort"/> only the active plan has to succeed (the elevated helper's last resort).
+    /// </summary>
+    static uint Write(Guid sub, Guid setting, uint ac, uint dc, bool bestEffort)
     {
         if (PowerGetActiveScheme(IntPtr.Zero, out var p) != 0 || p == IntPtr.Zero) return 1;
-        var scheme = Marshal.PtrToStructure<Guid>(p);
+        var active = Marshal.PtrToStructure<Guid>(p);
         LocalFree(p);
-        uint r = PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref setting, ac);
-        if (r == 0) r = PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref setting, dc);
-        if (r == 0) r = PowerSetActiveScheme(IntPtr.Zero, ref scheme); // applies the change now
-        return r;
+
+        uint One(Guid scheme)
+        {
+            uint r = PowerWriteACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref setting, ac);
+            return r != 0 ? r : PowerWriteDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref setting, dc);
+        }
+
+        uint activeResult = One(active);
+        if (activeResult != 0) return activeResult;
+        uint others = 0;
+        foreach (var scheme in Schemes().Where(s => s != active))
+        {
+            uint r = One(scheme);
+            if (r != 0 && others == 0) others = r;
+        }
+        uint applied = PowerSetActiveScheme(IntPtr.Zero, ref active); // applies the change now
+        if (applied != 0) return applied;
+        return bestEffort ? 0 : others;
     }
 
     public const uint ErrorAccessDenied = 5;
@@ -128,6 +162,7 @@ public static class PowerConfig
         return new Caps(Lid: b[2] != 0, S3: b[5] != 0, S4: b[6] != 0, HiberFile: b[8] != 0, AoAc: b[20] != 0, Battery: b[30] != 0);
     }
 
+    [DllImport("powrprof.dll")] static extern uint PowerEnumerate(IntPtr root, IntPtr scheme, IntPtr sub, uint accessFlags, uint index, [Out] byte[] buffer, ref uint size);
     [DllImport("powrprof.dll")] static extern uint PowerGetActiveScheme(IntPtr userRootPowerKey, out IntPtr activePolicyGuid);
     [DllImport("powrprof.dll")] static extern uint PowerSetActiveScheme(IntPtr userRootPowerKey, ref Guid schemeGuid);
     [DllImport("powrprof.dll")] static extern uint PowerReadACValueIndex(IntPtr root, ref Guid scheme, ref Guid sub, ref Guid setting, out uint value);

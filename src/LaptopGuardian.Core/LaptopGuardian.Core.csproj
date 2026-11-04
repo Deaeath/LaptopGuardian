@@ -10,6 +10,7 @@
     <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.0" />
     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="10.0.0" />
     <PackageReference Include="System.Management" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Win32.SystemEvents" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>

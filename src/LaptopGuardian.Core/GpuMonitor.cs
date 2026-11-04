@@ -36,6 +36,12 @@ public sealed class GpuMonitor : IDisposable
     /// <summary>Takes one sample now, on the calling thread, and records it.</summary>
     public void SampleOnce() => Tick();
 
+    /// <summary>Fills the history with made-up samples, for the sample-data screenshots.</summary>
+    internal void InjectSamples(IEnumerable<GpuSnapshot> samples)
+    {
+        lock (_gate) { _history.Clear(); _history.AddRange(samples); Latest = _history.LastOrDefault(); }
+    }
+
     void Tick()
     {
         try
@@ -76,7 +82,6 @@ public sealed class GpuMonitor : IDisposable
             // provider). Publish temperature and power right away instead of a blank card.
             var quick = new GpuSnapshot { At = snap.At, Name = snap.Name, MemoryTotalGB = snap.MemoryTotalGB, TemperatureC = snap.TemperatureC };
             if (quick.TemperatureC != null && a.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase)) Nvml.Enrich(quick);
-            quick.TemperatureLimitC ??= 87;
             Latest = quick;
             Sampled?.Invoke(quick);
             _countersWarm = true;
@@ -88,7 +93,8 @@ public sealed class GpuMonitor : IDisposable
         bool awake = snap.TemperatureC != null || (snap.UtilizationPct ?? 0) > 0.5;
         snap.Asleep = !awake && a.TemperatureDeciC == 0;
         if (awake && a.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase)) Nvml.Enrich(snap);
-        snap.TemperatureLimitC ??= 87; // typical for laptop graphics chips when the driver does not say
+        // No limit is assumed when the driver does not state one: many AMD cards normally run hotter than
+        // an NVIDIA laptop card's target, and warning them about it would be a false alarm.
         return snap;
     }
 

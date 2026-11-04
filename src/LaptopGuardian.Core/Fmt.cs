@@ -26,6 +26,14 @@ public static class Fmt
         return $"{local.ToString("MMM d, yyyy", Ui)}, {clock}";
     }
 
+    /// <summary>The same, for the middle of a sentence: "today 9:24 PM".</summary>
+    public static string WhenInSentence(DateTimeOffset t)
+    {
+        string s = When(t);
+        return s.StartsWith("Today", StringComparison.Ordinal) || s.StartsWith("Yesterday", StringComparison.Ordinal)
+            ? char.ToLowerInvariant(s[0]) + s[1..] : s;
+    }
+
     public static string Day(DateTimeOffset t)
     {
         var local = t.ToLocalTime().Date;

@@ -39,7 +39,38 @@ public sealed class Guardian : IDisposable
     public List<Recommendation> Recommendations { get; private set; } = new();
     public DriverReport? Drivers { get; private set; }
     public bool CheckingDrivers { get; private set; }
-    Timer? _driverTimer;
+    Timer? _driverTimer, _recorderTimer;
+    FlightRecorder Recorder => _recorder ??= new FlightRecorder(_dataDir == null ? null : Path.Combine(_dataDir, "flight-recorder.jsonl"));
+    FlightRecorder? _recorder;
+    volatile string _powerState = "awake";
+
+    void RecordFlightSample()
+    {
+        var (pct, ac) = PowerStatus();
+        var g = Gpu.Latest;
+        if (g != null && DateTimeOffset.Now - g.At > TimeSpan.FromMinutes(1)) g = null;
+        Recorder.Write(new FlightSample
+        {
+            At = DateTimeOffset.Now,
+            State = _powerState,
+            ZoneC = FlightRecorder.ReadThermalZone(),
+            GpuC = g?.TemperatureC,
+            GpuLimitC = g?.TemperatureLimitC,
+            GpuBusyPct = g?.UtilizationPct is double u ? Math.Round(u) : null,
+            GpuMemoryPct = g?.MemoryPct is double m ? Math.Round(m) : null,
+            GpuW = g?.PowerW is double w ? Math.Round(w) : null,
+            Throttle = g?.Throttle,
+            OnAc = ac,
+            BatteryPct = pct,
+            TopApps = g == null || g.TopApps.Count == 0 ? null : string.Join(", ", g.TopApps.Take(3).Select(a => $"{a.Name} {a.UtilizationPct:0}%")),
+        });
+    }
+
+    void OnPowerModeChanged(object? sender, Microsoft.Win32.PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == Microsoft.Win32.PowerModes.Suspend) { _powerState = "suspending"; RecordFlightSample(); }
+        else if (e.Mode == Microsoft.Win32.PowerModes.Resume) { _powerState = "awake"; RecordFlightSample(); }
+    }
     public bool Scanning { get; private set; }
     public string? KeyboardError { get; private set; }
     /// <summary>Milliseconds per step of the last scan (shown by --diagnose).</summary>
@@ -75,6 +106,9 @@ public sealed class Guardian : IDisposable
         _rescanTimer = new Timer(_ => Scan(), null, TimeSpan.FromSeconds(1), TimeSpan.FromHours(6));
         // Driver and BIOS updates: shortly after start (the history scan goes first), then daily.
         _driverTimer = new Timer(_ => _ = CheckDriversAsync(), null, TimeSpan.FromSeconds(45), TimeSpan.FromHours(24));
+        // The flight recorder: a line every 10 seconds, so the next sudden reset leaves evidence.
+        _recorderTimer = new Timer(_ => { try { RecordFlightSample(); } catch (Exception ex) { Debug.WriteLine(ex); } }, null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10));
+        try { Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged; } catch (Exception ex) { Debug.WriteLine(ex); }
     }
 
     int _checkingDrivers;
@@ -231,16 +265,19 @@ public sealed class Guardian : IDisposable
 
             // Unexpected shutdowns.
             var newCrashes = new List<Incident>();
-            foreach (var found in CrashScanner.Scan(TimeSpan.FromDays(60), Battery))
+            // Work out new crashes, and any recorded by older reasoning (keeping what the person noted about them).
+            foreach (var found in CrashScanner.Scan(TimeSpan.FromDays(60), Battery, Recorder,
+                t => (Journal.Find(CrashScanner.IdFor(t))?.Crash?.ClassifierVersion ?? 0) < CrashClassifier.Version))
             {
                 var inc = CrashScanner.ToIncident(found);
-                if (Journal.Add(inc, save: false) && DateTimeOffset.Now - found.Event.Time < TimeSpan.FromHours(24))
-                    newCrashes.Add(inc);
+                bool isNew = !Journal.Contains(inc.Id);
+                Journal.Upsert(inc);
+                if (isNew && DateTimeOffset.Now - found.Event.Time < TimeSpan.FromHours(24)) newCrashes.Add(inc);
             }
             Mark("crashes");
 
             // Windows Error Reporting: distinct reports, not every retry.
-            KernelReports = WerReports.Group(WerReports.Read(TimeSpan.FromDays(60)));
+            KernelReports = ReadKernelReports();
             foreach (var k in KernelReports.Where(k => k.EventName.Equals("LiveKernelEvent", StringComparison.OrdinalIgnoreCase)))
                 Journal.Add(FromKernelReport(k), save: false);
             Mark("crash reports");
@@ -259,7 +296,7 @@ public sealed class Guardian : IDisposable
                 if (Settings.NotifyCrashes)
                     foreach (var c in newCrashes.OrderBy(c => c.Time))
                         Raise("crash:" + c.Id, TimeSpan.FromDays(1), new Alert(c.Kind, Severity.Critical,
-                            $"Unexpected shutdown {Fmt.When(c.Time).ToLowerInvariant()}", c.Summary, "shutdowns", c.Id));
+                            $"{c.Title}, {Fmt.WhenInSentence(c.Time)}", c.Summary, "shutdowns", c.Id));
                 if (missed.Count > 0 && Settings.NotifyGraphics)
                     Raise("graphics", TimeSpan.FromMinutes(5), new Alert(IncidentKind.GraphicsError, Severity.Warning,
                         Fmt.Plural(missed.Count, "graphics error", "graphics errors") + " while LaptopGuardian was closed",
@@ -272,6 +309,15 @@ public sealed class Guardian : IDisposable
             Monitor.Exit(_scanGate);
             Changed?.Invoke();
         }
+    }
+
+    List<KernelReport> ReadKernelReports()
+    {
+        var reports = WerReports.Group(WerReports.Read(TimeSpan.FromDays(60)));
+        // The log keeps the old retries after the reports themselves are gone.
+        if (State.ReportsClearedAt is DateTimeOffset cleared)
+            foreach (var r in reports) r.MarkClearedAt(cleared);
+        return reports;
     }
 
     void AnnounceHistory()
@@ -449,7 +495,7 @@ public sealed class Guardian : IDisposable
                     $"Done. Sleep now turns into hibernation after {Advisor.HibernateAfterSeconds / 60} minutes.");
                 break;
             case Advisor.ActionLidHibernate:
-                result = await PowerChange(PowerConfig.SetLidAndButtonToHibernate, "lid-hibernate",
+                result = await PowerChange(() => PowerConfig.SetLidAndButtonToHibernate(), "lid-hibernate",
                     "Done. Closing the lid or pressing the power button now hibernates.");
                 break;
             case Advisor.ActionEnableHibernate:
@@ -457,7 +503,12 @@ public sealed class Guardian : IDisposable
                 break;
             case Advisor.ActionClearReports:
                 result = await Elevation.RunAsync(_dataDir, "clear-reports");
-                if (result.Ok) await Task.Run(() => { KernelReports = WerReports.Group(WerReports.Read(TimeSpan.FromDays(60))); });
+                if (result.Ok)
+                {
+                    State.ReportsClearedAt = DateTimeOffset.Now;
+                    SaveState();
+                    await Task.Run(() => { KernelReports = ReadKernelReports(); });
+                }
                 break;
             case Advisor.ActionSleepStudy:
                 result = await Elevation.RunAsync(_dataDir, "sleep-study");
@@ -492,6 +543,8 @@ public sealed class Guardian : IDisposable
         _batteryTimer?.Dispose();
         _rescanTimer?.Dispose();
         _driverTimer?.Dispose();
+        _recorderTimer?.Dispose();
+        try { Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged; } catch { }
         Gpu.Dispose();
         Keyboard.Dispose();
     }
@@ -509,7 +562,8 @@ public static class Elevation
         try { File.Delete(resultPath); } catch { }
         try
         {
-            var psi = new ProcessStartInfo(Environment.ProcessPath!, $"{Flag} {task}") { UseShellExecute = true, Verb = "runas" };
+            // The data folder goes along: on a standard account, the elevated copy runs as a different user with a different %APPDATA%.
+            var psi = new ProcessStartInfo(Environment.ProcessPath!, $"{Flag} {task} --data \"{dataDir}\"") { UseShellExecute = true, Verb = "runas" };
             using var p = Process.Start(psi);
             if (p == null) return new ActionResult(false, "Could not start the helper.");
             await p.WaitForExitAsync();
@@ -529,7 +583,8 @@ public static class Elevation
     /// <summary>Entry point of the elevated copy. Writes its result where the normal copy will read it.</summary>
     public static int Main(string[] args)
     {
-        string dataDir = Guardian.DefaultDataDir;
+        int dataArg = Array.IndexOf(args, "--data");
+        string dataDir = dataArg >= 0 && dataArg + 1 < args.Length ? args[dataArg + 1] : Guardian.DefaultDataDir;
         Directory.CreateDirectory(dataDir);
         ActionResult result;
         try
@@ -539,8 +594,8 @@ public static class Elevation
             {
                 "clear-reports" => ClearReports(),
                 "enable-hibernate" => RunTool("powercfg.exe", "/hibernate on", "Hibernation is on."),
-                "lid-hibernate" => Check(PowerConfig.SetLidAndButtonToHibernate(), "Closing the lid or pressing the power button now hibernates."),
-                "hibernate-after" => Check(PowerConfig.SetHibernateAfter(uint.Parse(args[1], CultureInfo.InvariantCulture)), "Sleep now turns into hibernation after a while."),
+                "lid-hibernate" => Check(PowerConfig.SetLidAndButtonToHibernate(bestEffort: true), "Closing the lid or pressing the power button now hibernates."),
+                "hibernate-after" => Check(PowerConfig.SetHibernateAfter(uint.Parse(args[1], CultureInfo.InvariantCulture), bestEffort: true), "Sleep now turns into hibernation after a while."),
                 "sleep-study" => SleepStudy(dataDir),
                 DriverChecks.ActionInstallWindowsUpdateDrivers => DriverChecks.InstallWindowsUpdateDrivers(),
                 _ => new ActionResult(false, $"Unknown task '{task}'."),
@@ -558,6 +613,7 @@ public static class Elevation
         var stuck = WerReports.Group(WerReports.Read(TimeSpan.FromDays(120))).Where(r => r.Stuck).ToList();
         if (stuck.Count == 0) return new ActionResult(true, "There were no stuck reports.");
         var (n, files, bytes, errors) = WerReports.Clear(stuck);
+        if (n == 0 && errors.Count == 0) return new ActionResult(true, "Those reports were already gone. Windows will not retry them.");
         string msg = $"Cleared {Fmt.Plural(n, "report", "reports")} and {Fmt.Plural(files, "dump file", "dump files")} ({bytes / 1048576.0:0} MB). Windows will stop retrying them.";
         if (errors.Count > 0) msg += " Some could not be removed: " + string.Join("; ", errors.Take(3));
         return new ActionResult(n > 0, msg);

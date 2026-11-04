@@ -26,6 +26,8 @@ public sealed class AppState
     public List<string> DismissedRecommendations { get; set; } = new();
     /// <summary>Driver updates already announced, so each one is announced once.</summary>
     public List<string> AnnouncedDriverUpdates { get; set; } = new();
+    /// <summary>When the stuck crash reports were last cleared; older log entries of them no longer count.</summary>
+    public DateTimeOffset? ReportsClearedAt { get; set; }
 }
 
 /// <summary>Reads and writes small JSON files atomically (write, then rename), so a crash never leaves half a file.</summary>
@@ -85,6 +87,8 @@ public sealed class Journal
     public IReadOnlyList<Incident> Items { get { lock (_gate) return _items.OrderByDescending(i => i.Time).ToList(); } }
 
     public bool Contains(string id) { lock (_gate) return _items.Any(i => i.Id == id); }
+
+    public Incident? Find(string id) { lock (_gate) return _items.FirstOrDefault(i => i.Id == id); }
 
     /// <summary>Adds the incident unless one with the same id exists. Returns true if it was new.</summary>
     public bool Add(Incident incident, bool save = true)

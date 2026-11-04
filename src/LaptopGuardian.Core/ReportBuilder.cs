@@ -18,7 +18,7 @@ public static class ReportBuilder
 
         sb.AppendLine("## This laptop");
         sb.AppendLine();
-        sb.AppendLine($"- Model: {f.System.Manufacturer} {f.System.Model}");
+        sb.AppendLine($"- Model: {f.System.Maker} {f.System.ShortModel} ({f.System.Model})");
         sb.AppendLine($"- BIOS: {f.System.BiosVersion}{(f.System.BiosDate is DateTime bd ? $" ({bd:MMMM d, yyyy})" : "")}");
         sb.AppendLine($"- Windows: {f.System.Windows}");
         foreach (var a in f.System.Adapters)
@@ -68,7 +68,9 @@ public static class ReportBuilder
             {
                 var line = new List<string>();
                 if (ci.AsleepSince is DateTimeOffset s) line.Add($"asleep since {Fmt.When(s)}");
-                if (ci.LastAlive is DateTimeOffset la) line.Add($"last sign of life {Fmt.When(la)}");
+                if (ci.LastActivity is DateTimeOffset act) line.Add($"last activity {Fmt.When(act)}");
+                else if (ci.LastAlive is DateTimeOffset la) line.Add($"Windows last noted it running {Fmt.When(la)}");
+                if (ci.LastReading is FlightSample fs) line.Add($"last reading: {fs.Describe()}");
                 line.Add($"restarted {Fmt.When(ci.RestartedAt)}");
                 if (ci.PowerButtonPressedAt is DateTimeOffset pb) line.Add($"power button held {Fmt.When(pb)}");
                 if (ci.BugcheckCode != 0) line.Add($"stop code 0x{ci.BugcheckCode:X} {ci.BugcheckName}");

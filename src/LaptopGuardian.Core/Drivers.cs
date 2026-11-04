@@ -20,11 +20,18 @@ public sealed record DriverUpdate(
     DateTime? Released,
     string? Url,         // where to download it, if it is not installed from here
     string? ActionId,    // set when LaptopGuardian can install it itself
-    Severity Severity);
+    Severity Severity,
+    string? DownloadUrl = null); // the file itself, when the source gives one
 
 public sealed class DriverReport
 {
     public DateTimeOffset CheckedAt { get; init; } = DateTimeOffset.Now;
+    public string? NvidiaLatest { get; set; }
+    public string? NvidiaDownloadUrl { get; set; }
+    public string? NvidiaDetailsUrl { get; set; }
+    public string? AmdLatest { get; set; }
+    public string? AmdPageUrl { get; set; }
+    public List<InstalledApp> Apps { get; set; } = new();
     public List<DriverInfo> Installed { get; init; } = new();
     public List<ProblemDevice> Problems { get; init; } = new();
     public List<DriverUpdate> Updates { get; init; } = new();
@@ -56,16 +63,21 @@ public static class DriverChecks
     public static async Task<DriverReport> RunAsync(SystemSnapshot sys, CancellationToken ct = default)
     {
         var notes = new List<string>();
+        var facts = new DriverReport { Notes = notes };
         var installed = Task.Run(Installed, ct);
         var problems = Task.Run(Problems, ct);
         var wu = Task.Run(() => WindowsUpdateDrivers(notes), ct);
-        var gpu = sys.Adapters.FirstOrDefault(a => a.Vendor == "NVIDIA");
-        var nvidia = gpu != null ? Nvidia(gpu, notes, ct) : Task.FromResult<DriverUpdate?>(null);
+        var apps = Task.Run(InstalledApps.Read, ct);
+        var nvidiaGpu = sys.Adapters.FirstOrDefault(a => a.Vendor == "NVIDIA");
+        var amdGpu = sys.Adapters.FirstOrDefault(a => a.Vendor == "AMD");
+        var nvidia = nvidiaGpu != null ? Nvidia(nvidiaGpu, facts, notes, ct) : Task.FromResult<DriverUpdate?>(null);
+        var amd = amdGpu != null ? Amd(amdGpu, sys, facts, notes, ct) : Task.FromResult<DriverUpdate?>(null);
         var bios = sys.IsAsus ? AsusBios(sys, notes, ct) : Task.FromResult<(DriverUpdate?, string?, bool)>((null, null, false));
 
-        await Task.WhenAll(installed, problems, wu, nvidia, bios);
+        await Task.WhenAll(installed, problems, wu, apps, nvidia, amd, bios);
         var updates = new List<DriverUpdate>();
         if (nvidia.Result is DriverUpdate n) updates.Add(n);
+        if (amd.Result is DriverUpdate am) updates.Add(am);
         if (bios.Result.Item1 is DriverUpdate b) updates.Add(b);
         updates.AddRange(wu.Result);
         return new DriverReport
@@ -76,6 +88,12 @@ public static class DriverChecks
             LatestBios = bios.Result.Item2,
             BiosIsLatest = bios.Result.Item3,
             Notes = notes,
+            Apps = apps.Result,
+            NvidiaLatest = facts.NvidiaLatest,
+            NvidiaDownloadUrl = facts.NvidiaDownloadUrl,
+            NvidiaDetailsUrl = facts.NvidiaDetailsUrl,
+            AmdLatest = facts.AmdLatest,
+            AmdPageUrl = facts.AmdPageUrl,
         };
     }
 
@@ -84,7 +102,7 @@ public static class DriverChecks
     static readonly (string Guid, string Category)[] Classes =
     {
         ("{4d36e968-e325-11ce-bfc1-08002be10318}", "Graphics"),
-        ("{4d36e97d-e325-11ce-bfc1-08002be10318}", "Chipset"),
+        ("{4d36e97d-e325-11ce-bfc1-08002be10318}", "System"),
         ("{4d36e972-e325-11ce-bfc1-08002be10318}", "Network"),
         ("{e0cbf06c-cd8b-4647-bb8a-263b43f0f974}", "Bluetooth"),
         ("{4d36e96c-e325-11ce-bfc1-08002be10318}", "Audio"),
@@ -210,7 +228,7 @@ public static class DriverChecks
         return null;
     }
 
-    static async Task<DriverUpdate?> Nvidia(GraphicsAdapter gpu, List<string> notes, CancellationToken ct)
+    static async Task<DriverUpdate?> Nvidia(GraphicsAdapter gpu, DriverReport facts, List<string> notes, CancellationToken ct)
     {
         try
         {
@@ -230,15 +248,73 @@ public static class DriverChecks
             if (version.Length == 0) return null;
             DateTime? released = DateTime.TryParseExact(info.GetProperty("ReleaseDateTime").GetString(), "ddd MMM d, yyyy",
                 CultureInfo.InvariantCulture, DateTimeStyles.None, out var r) ? r : null;
+            string details = info.TryGetProperty("DetailsURL", out var d) ? d.GetString() ?? DriverPages.Nvidia : DriverPages.Nvidia;
+            string? file = info.TryGetProperty("DownloadURL", out var dl) ? dl.GetString() : null;
+            facts.NvidiaLatest = version;
+            facts.NvidiaDetailsUrl = details;
+            facts.NvidiaDownloadUrl = file;
             if (!IsNewer(version, gpu.FriendlyVersion)) return null;
-            return new DriverUpdate($"nvidia:{version}", "NVIDIA", "NVIDIA Game Ready driver", gpu.FriendlyVersion, version, released,
-                info.TryGetProperty("DetailsURL", out var d) ? d.GetString() : "https://www.nvidia.com/en-us/drivers/", null, Severity.Warning);
+            return new DriverUpdate($"nvidia:{version}", "NVIDIA", "NVIDIA Game Ready driver", gpu.FriendlyVersion, version, released, details, null, Severity.Warning, file);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            lock (notes) notes.Add("Could not reach NVIDIA's driver lookup: " + ex.Message);
+            lock (notes) notes.Add("Could not reach NVIDIA's driver lookup right now.");
             return null;
         }
+    }
+
+    // ------------------------------------------------------------ AMD
+
+    static readonly System.Text.RegularExpressions.Regex AdrenalinVersion = new(@"adrenalin-edition-(\d+\.\d+\.\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>The newest AMD Software version named in a page from AMD's driver site.</summary>
+    public static string? LatestAdrenalin(string html)
+    {
+        Version? best = null;
+        foreach (System.Text.RegularExpressions.Match m in AdrenalinVersion.Matches(html))
+            if (Version.TryParse(m.Groups[1].Value, out var v) && (best == null || v > best)) best = v;
+        return best?.ToString();
+    }
+
+    /// <summary>AMD's own driver page for this product, when its address can be worked out from the name.</summary>
+    public static string? AmdProductPage(string gpuName, string cpuName)
+    {
+        var rx = System.Text.RegularExpressions.Regex.Match(gpuName, @"Radeon(?:\(TM\))?\s+RX\s+(\d)(\d{3})([A-Za-z]*)(?:\s+([A-Za-z]+))?", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (rx.Success)
+        {
+            string letters = rx.Groups[3].Value.ToLowerInvariant();
+            string word = rx.Groups[4].Success ? "-" + rx.Groups[4].Value.ToLowerInvariant() : "";
+            string series = rx.Groups[1].Value;
+            return $"{DriverPages.AmdRoot}/graphics/radeon-rx/radeon-rx-{series}000-series/amd-radeon-rx-{series}{rx.Groups[2].Value}{letters}{word}.html";
+        }
+        var ryzen = System.Text.RegularExpressions.Regex.Match(cpuName, @"Ryzen\s+(\d)\s+(\d)(\d{3})([A-Z0-9]*)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (ryzen.Success)
+            return $"{DriverPages.AmdRoot}/processors/ryzen/ryzen-{ryzen.Groups[2].Value}000-series/amd-ryzen-{ryzen.Groups[1].Value}-{ryzen.Groups[2].Value}{ryzen.Groups[3].Value}{ryzen.Groups[4].Value.ToLowerInvariant()}.html";
+        return null;
+    }
+
+    static async Task<DriverUpdate?> Amd(GraphicsAdapter gpu, SystemSnapshot sys, DriverReport facts, List<string> notes, CancellationToken ct)
+    {
+        string page = DriverPages.Amd;
+        string? version = null;
+        var exact = AmdProductPage(gpu.Name, sys.Cpu);
+        if (exact != null)
+        {
+            try
+            {
+                version = LatestAdrenalin(await Http.GetStringAsync(exact, ct));
+                if (version != null) page = exact;
+            }
+            catch { }
+        }
+        try { version ??= LatestAdrenalin(await Http.GetStringAsync(DriverPages.Amd, ct)); }
+        catch { lock (notes) notes.Add("Could not reach AMD's driver site right now."); }
+        facts.AmdPageUrl = page;
+        if (version == null) return null;
+        facts.AmdLatest = version;
+        // No recorded AMD Software version means a laptop maker's driver: AMD Software or the maker decides.
+        if (gpu.FriendlyVersion == null || !IsNewer(version, gpu.FriendlyVersion)) return null;
+        return new DriverUpdate($"amd:{version}", "AMD", "AMD Software driver", gpu.FriendlyVersion, version, null, page, null, Severity.Warning);
     }
 
     // ------------------------------------------------------------ BIOS (ASUS)

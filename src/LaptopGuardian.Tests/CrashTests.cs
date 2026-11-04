@@ -64,29 +64,27 @@ public class CrashClassifierTests
     static readonly DateTimeOffset Died = new(2026, 11, 3, 21, 24, 57, TimeSpan.FromHours(-5));
     static readonly DateTimeOffset Back = new(2026, 11, 3, 21, 30, 39, TimeSpan.FromHours(-5));
 
-    static CrashFacts Facts(UsageEntry? state = null, uint bug = 0, DateTimeOffset? button = null, bool standby = false, bool covered = true) => new()
+    static CrashFacts Facts(DateTimeOffset? asleep = null, uint bug = 0, DateTimeOffset? button = null, bool standby = false, UsageEntry? power = null, DateTimeOffset? activity = null, FlightSample? reading = null) => new()
     {
         RestartedAt = Back,
         LastAlive = Died,
+        LastActivity = activity,
+        LastReading = reading,
+        AsleepSince = asleep,
         BugcheckCode = bug,
         PowerButtonPressedAt = button,
         ConnectedStandby = standby,
-        StateBefore = state,
-        PowerHistoryCovers = covered,
+        PowerBefore = power,
     };
 
-    static UsageEntry Asleep(bool ac = true) => new(Slept, "Suspend", ac, 53813, 61854);
-    static UsageEntry Active(bool ac = true, int charge = 53813) => new(Slept, "Active", ac, charge, 61854);
+    static UsageEntry Row(string type = "Active", bool ac = true, int charge = 53813) => new(Slept, type, ac, charge, 61854);
 
     [Fact]
-    public void Plugged_in_and_asleep_with_no_code_is_died_asleep()
+    public void Windows_saying_it_went_to_sleep_is_died_asleep()
     {
-        // The crash of 3 November 2026: asleep at 8:39 PM, last alive at 9:24 PM, plugged in at 87%.
-        var v = CrashClassifier.Classify(Facts(Asleep()));
+        var v = CrashClassifier.Classify(Facts(asleep: Slept, power: Row()));
         Assert.Equal(CrashCause.DiedAsleep, v.Cause);
-        Assert.Contains("46 min later", v.Summary);
-        Assert.Contains("plugged in with the battery at 87%", v.Summary);
-        Assert.Contains("No error code", v.Summary);
+        Assert.Contains("went to sleep", v.Summary);
     }
 
     [Fact]
@@ -96,7 +94,7 @@ public class CrashClassifierTests
     [Fact]
     public void Asleep_and_power_button_pressed_is_would_not_wake()
     {
-        var v = CrashClassifier.Classify(Facts(Asleep(), button: Died.AddMinutes(8)));
+        var v = CrashClassifier.Classify(Facts(asleep: Slept, button: Died.AddMinutes(8)));
         Assert.Equal(CrashCause.FrozeAsleepForcedOff, v.Cause);
         Assert.Contains("power button was pressed", v.Summary);
         Assert.DoesNotContain("turned off", v.Summary);
@@ -104,12 +102,12 @@ public class CrashClassifierTests
 
     [Fact]
     public void In_use_and_power_button_pressed_is_stopped_responding() =>
-        Assert.Equal(CrashCause.FrozeForcedOff, CrashClassifier.Classify(Facts(Active(), button: Died.AddMinutes(7))).Cause);
+        Assert.Equal(CrashCause.FrozeForcedOff, CrashClassifier.Classify(Facts(button: Died.AddMinutes(7))).Cause);
 
     [Theory]
     [InlineData(0x14Fu)] // PDC_WATCHDOG_TIMEOUT: failed to leave Modern Standby
     [InlineData(0x9Fu)]  // DRIVER_POWER_STATE_FAILURE
-    public void Sleep_stop_codes_are_crashes_waking_from_sleep(uint code)
+    public void Sleep_stop_codes_are_crashes_around_sleep(uint code)
     {
         var v = CrashClassifier.Classify(Facts(bug: code));
         Assert.Equal(CrashCause.SleepTransition, v.Cause);
@@ -127,22 +125,69 @@ public class CrashClassifierTests
 
     [Fact]
     public void Power_button_hold_bugcheck_is_not_reported_as_a_blue_screen() =>
-        Assert.Equal(CrashCause.FrozeForcedOff, CrashClassifier.Classify(Facts(Active(), bug: 0x1C8)).Cause);
+        Assert.Equal(CrashCause.FrozeForcedOff, CrashClassifier.Classify(Facts(bug: 0x1C8)).Cause);
 
     [Fact]
     public void Empty_battery_is_battery_ran_out() =>
-        Assert.Equal(CrashCause.BatteryRanOut, CrashClassifier.Classify(Facts(Active(ac: false, charge: 1500))).Cause);
+        Assert.Equal(CrashCause.BatteryRanOut, CrashClassifier.Classify(Facts(power: Row(ac: false, charge: 1500))).Cause);
 
     [Fact]
-    public void Older_than_the_battery_report_does_not_claim_it_was_in_use()
+    public void Running_then_restarting_within_seconds_is_a_sudden_reset()
     {
-        var v = CrashClassifier.Classify(Facts(state: null, covered: false));
-        Assert.Equal(CrashCause.Unknown, v.Cause);
-        Assert.DoesNotContain("in use at", v.Summary);
-        Assert.Contains("not recorded", v.Summary);
+        var v = CrashClassifier.Classify(Facts(activity: Back.AddSeconds(-24), reading: new FlightSample { At = Back.AddSeconds(-24), ZoneC = 96, GpuC = 87, GpuBusyPct = 100 }));
+        Assert.Equal(CrashCause.SuddenReset, v.Cause);
+        Assert.Contains("24 s later", v.Summary);
+        Assert.Contains("96°C", v.Summary);
+        Assert.Contains("no press of the power button", v.Summary);
     }
 
     [Fact]
-    public void Covered_and_active_is_froze_while_in_use() =>
-        Assert.Contains("while in use", CrashClassifier.Classify(Facts(Active())).Summary);
+    public void A_long_gap_before_the_restart_is_not_called_sudden()
+    {
+        var v = CrashClassifier.Classify(Facts(activity: Back.AddMinutes(-9)));
+        Assert.Equal(CrashCause.Unknown, v.Cause);
+        Assert.DoesNotContain("while in use", v.Summary);
+    }
+
+    [Fact]
+    public void Only_a_stale_stamp_is_described_as_some_time_after_it() =>
+        Assert.Contains("some time after", CrashClassifier.Classify(Facts()).Summary);
+}
+
+public class FlightRecorderTests
+{
+    [Fact]
+    public void The_last_line_before_a_crash_survives_a_half_written_one()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "lg-test-" + Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(dir, "flight.jsonl");
+        try
+        {
+            var r = new FlightRecorder(path);
+            var t = new DateTimeOffset(2026, 11, 4, 14, 48, 50, TimeSpan.FromHours(-5));
+            r.Write(new FlightSample { At = t.AddSeconds(-10), GpuC = 80 });
+            r.Write(new FlightSample { At = t, GpuC = 87, ZoneC = 96 });
+            File.AppendAllText(path, "{\"At\":\"2026-11-04T14:48"); // the reset came mid-write
+            var last = r.LastBefore(t.AddSeconds(26), TimeSpan.FromHours(1));
+            Assert.Equal(87, last!.GpuC);
+            Assert.Null(r.LastBefore(t.AddSeconds(-30), TimeSpan.FromHours(1)));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+    }
+
+    [Fact]
+    public void It_stays_small()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "lg-test-" + Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(dir, "flight.jsonl");
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllBytes(path, new byte[FlightRecorder.MaxFileBytes + 10]);
+            new FlightRecorder(path).Write(new FlightSample { At = DateTimeOffset.Now });
+            Assert.True(new FileInfo(path).Length < 1000);
+            Assert.True(File.Exists(path + ".1"));
+        }
+        finally { if (Directory.Exists(dir)) Directory.Delete(dir, true); }
+    }
 }

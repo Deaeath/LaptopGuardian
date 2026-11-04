@@ -133,20 +133,19 @@ public sealed class CrashVm : Observable
         var steps = new List<StepVm>();
         if (c != null)
         {
-            var anchor = c.LastAlive ?? c.RestartedAt;
+            var anchor = c.LastActivity ?? c.LastAlive ?? c.RestartedAt;
             string T(DateTimeOffset t) => t.ToLocalTime().Date == anchor.ToLocalTime().Date ? Fmt.Clock(t) : Fmt.When(t);
             if (c.AsleepSince is DateTimeOffset s) steps.Add(new StepVm(T(s), "Went to sleep", Theme.Brush("Info")));
-            if (c.LastAlive is DateTimeOffset la) steps.Add(new StepVm(T(la), "Last sign of life", Theme.Brush("Bad")));
-            if (c.PowerButtonPressedAt is DateTimeOffset pb) steps.Add(new StepVm(T(pb), "Power button held", Theme.Brush("Warn")));
+            if (c.LastActivity is DateTimeOffset act) steps.Add(new StepVm(T(act), "Last activity", Theme.Brush("Bad")));
+            else if (c.LastAlive is DateTimeOffset la) steps.Add(new StepVm(T(la), "Windows last noted it running", Theme.Brush("Faint")));
+            if (c.PowerButtonPressedAt is DateTimeOffset pb) steps.Add(new StepVm(T(pb), "Power button pressed", Theme.Brush("Warn")));
             steps.Add(new StepVm(T(c.RestartedAt), "Started again", Theme.Brush("Good")));
 
             var facts = new List<string>();
             if (c.OnAc is bool ac) facts.Add(ac ? "Plugged in" : "On battery");
-            if (c.BatteryPercent is int p) facts.Add($"battery {p}%");
             facts.Add(c.BugcheckCode != 0 ? $"stop code 0x{c.BugcheckCode:X} {c.BugcheckName}" : "no error code");
             if (c.GraphicsErrorsBefore > 0) facts.Add(Fmt.Plural(c.GraphicsErrorsBefore, "graphics error", "graphics errors") + " in the hour before");
-            if (c.AsleepSince is DateTimeOffset s2 && c.LastAlive is DateTimeOffset la2 && la2 > s2) facts.Add($"asleep {Fmt.Span(la2 - s2)}");
-            if (c.LastAlive is DateTimeOffset la3 && c.RestartedAt > la3) facts.Add($"off for {Fmt.Span(c.RestartedAt - la3)}");
+            if (c.LastActivity is DateTimeOffset act2 && c.RestartedAt > act2) facts.Add($"restarted {Fmt.Span(c.RestartedAt - act2)} later");
             Facts = string.Join("  ·  ", facts);
         }
         Steps = steps;
@@ -185,6 +184,7 @@ public sealed class RecommendationVm : Observable
         ActCommand = new Command(async () =>
         {
             if (r.ActionId == null) return;
+            if (r.ActionId.StartsWith("go:", StringComparison.Ordinal)) { vm.Navigate(r.ActionId[3..]); return; }
             Busy = true;
             try { await vm.ApplyAsync(r.ActionId); }
             finally { Busy = false; }
@@ -216,7 +216,8 @@ public sealed class RecommendationVm : Observable
 }
 
 public sealed record KernelReportVm(string Title, string Line, string Meaning, Brush Brush, bool Stuck);
-public sealed record DriverUpdateVm(string Title, string Line, Brush Brush, string ButtonLabel, ICommand Command);
+public sealed record GuideActionVm(string Label, bool Primary, ICommand Command);
+public sealed record GuideVm(string Title, string Status, Brush Brush, string Glyph, List<string> Steps, List<GuideActionVm> Actions);
 public sealed record DriverRowVm(string Category, string Device, string Version, string Date);
 public sealed record SettingRow(string Label, string Plugged, string Battery);
 public sealed record ThresholdOption(int Ms, string Label);
@@ -463,7 +464,7 @@ public sealed class MainViewModel : Observable
 
     // ------------------------------------------------------------ drivers and app updates
 
-    public List<DriverUpdateVm> DriverUpdates { get; private set; } = new();
+    public List<GuideVm> Guides { get; private set; } = new();
     public List<ProblemDevice> ProblemDevices { get; private set; } = new();
     public List<DriverRowVm> InstalledDrivers { get; private set; } = new();
     public string DriverStatus { get; private set; } = "";
@@ -485,26 +486,23 @@ public sealed class MainViewModel : Observable
         if (d == null)
         {
             DriverStatus = CheckingDrivers ? "Checking NVIDIA, Windows Update and your laptop's maker for newer drivers..." : "Not checked yet.";
-            DriverUpdates = new(); ProblemDevices = new(); InstalledDrivers = new(); BiosLine = "";
+            Guides = new(); ProblemDevices = new(); InstalledDrivers = new(); BiosLine = "";
             return;
         }
         DriverStatus = (CheckingDrivers ? "Checking again...  " : "") +
             (d.Updates.Count == 0 ? "Everything LaptopGuardian can check is up to date." : $"{Fmt.Plural(d.Updates.Count, "update", "updates")} available.") +
-            $"  Checked {Fmt.When(d.CheckedAt).ToLowerInvariant()}." + (d.Notes.Count > 0 ? "  " + string.Join(" ", d.Notes) : "");
-        BiosLine = d.LatestBios == null ? $"BIOS {f.System.BiosVersion}" + (f.System.BiosDate is DateTime bd ? $" from {bd:MMMM yyyy}" : "") + "."
-            : d.BiosIsLatest ? $"BIOS {f.System.BiosVersion} is the newest {f.System.Manufacturer.Replace(" COMPUTER INC.", "")} publishes for this model."
-            : $"BIOS {f.System.BiosVersion} installed; {d.LatestBios} is available.";
-        DriverUpdates = d.Updates.Select(u => new DriverUpdateVm(
-            $"{u.Title} {(u.Source == "Windows Update" ? "" : u.Available)}".Trim(),
-            string.Join("  ·  ", new[]
+            $"  Checked {Fmt.WhenInSentence(d.CheckedAt)}." + (d.Notes.Count > 0 ? "  " + string.Join(" ", d.Notes) : "");
+        BiosLine = "";
+        Guides = UpdateGuides.Build(f.System, d).Select(g => new GuideVm(g.Title, g.Status,
+            Theme.Brush(g.UpdateAvailable ? "Warn" : "Good"),
+            g.UpdateAvailable ? "" : "",
+            g.Steps.Select((s, i) => $"{i + 1}.  {s}").ToList(),
+            g.Actions.Select(a => new GuideActionVm(a.Label, a.Primary, a.Kind switch
             {
-                u.Source,
-                u.Installed != null ? $"you have {u.Installed}" : null,
-                u.Released is DateTime r ? $"released {r:MMM d, yyyy}" : null,
-            }.Where(s => s != null)),
-            Look.For(u.Severity),
-            u.ActionId != null ? "Install" : "Download",
-            u.ActionId != null ? new Command(async () => await ApplyAsync(u.ActionId)) : new Command(() => Open(u.Url)))).ToList();
+                GuideAction.App => new Command(() => OpenApp(a.Target, a.Label)),
+                GuideAction.Apply => new Command(async () => await ApplyAsync(a.Target)),
+                _ => new Command(() => Open(a.Target)),
+            })).ToList())).ToList();
         ProblemDevices = d.Problems;
         InstalledDrivers = d.Installed.Select(i => new DriverRowVm(i.Category, i.Device, i.Version, i.Date?.ToString("MMM yyyy") ?? "")).ToList();
     }
@@ -559,6 +557,12 @@ public sealed class MainViewModel : Observable
         try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true }); } catch { }
     }
 
+    void OpenApp(string appId, string label)
+    {
+        try { InstalledApps.Open(appId); }
+        catch (Exception ex) { ShowMessage($"Could not {label.ToLowerInvariant()}: {ex.Message}", true); }
+    }
+
     void SaveNote(string id, string? note) => _g.Journal.SetNote(id, note);
 
     // ------------------------------------------------------------ refresh
@@ -593,10 +597,10 @@ public sealed class MainViewModel : Observable
         Scanning = _g.Scanning;
         StatusHeadline = f.System.Model.Length == 0 && Scanning ? "Checking..." : headline;
         StatusSummary = f.System.Model.Length == 0 && Scanning ? "Reading what Windows recorded." : summary;
-        LastScanText = Scanning ? "Checking now..." : _g.State.LastScan is DateTimeOffset ls ? $"Checked {Fmt.When(ls).ToLowerInvariant()}" : "";
+        LastScanText = Scanning ? "Checking now..." : _g.State.LastScan is DateTimeOffset ls ? $"Checked {Fmt.WhenInSentence(ls)}" : "";
 
         var gpuAdapter = f.System.Discrete;
-        MachineLine = string.Join("  ·  ", new[] { $"{f.System.Manufacturer.Replace(" COMPUTER INC.", "")} {f.System.ShortModel}".Trim(), gpuAdapter?.Name, f.System.Windows }
+        MachineLine = string.Join("  ·  ", new[] { $"{f.System.Maker} {f.System.ShortModel}".Trim(), gpuAdapter?.Name, f.System.Windows }
             .Where(s => !string.IsNullOrWhiteSpace(s)));
         GpuDriverText = gpuAdapter == null ? "" :
             $"{gpuAdapter.Name}  ·  driver {(gpuAdapter.FriendlyVersion != null ? gpuAdapter.Vendor + " " + gpuAdapter.FriendlyVersion : gpuAdapter.DriverVersion)}" +
@@ -684,7 +688,7 @@ public sealed class MainViewModel : Observable
             HasStuckReports = stuck.Count > 0;
             KernelReports = f.KernelReports.Select(k => new KernelReportVm(
                 k.Code switch { "141" => "Graphics card stopped responding", "117" => "Display driver stopped responding", "193" => "Graphics diagnostic snapshot", _ => k.CodeName },
-                $"Happened {Fmt.When(k.HappenedAt)}  ·  logged {k.TimesLogged:N0} {(k.TimesLogged == 1 ? "time" : "times")}" + (k.Stuck ? $", most recently {Fmt.When(k.LastLogged).ToLowerInvariant()}" : ""),
+                $"Happened {Fmt.When(k.HappenedAt)}  ·  logged {k.TimesLogged:N0} {(k.TimesLogged == 1 ? "time" : "times")}" + (k.Stuck ? $", most recently {Fmt.WhenInSentence(k.LastLogged)}" : ""),
                 $"{k.EventName} 0x{k.Code} ({k.CodeName}). {k.Meaning}",
                 Theme.Brush(k.Stuck ? "Warn" : "Info"), k.Stuck)).ToList();
             int total = f.KernelReports.Sum(k => k.TimesLogged);
@@ -716,18 +720,20 @@ public sealed class MainViewModel : Observable
         var history = _g.Gpu.History.Where(h => !h.Asleep).ToList();
         GpuName = s?.Name ?? _g.System.Discrete?.Name ?? "Graphics card";
         GpuAsleep = s?.Asleep == true;
-        double limit = s?.TemperatureLimitC ?? 87;
+        double? limit = s?.TemperatureLimitC;
         if (s?.TemperatureC is double t)
         {
             GpuTempText = $"{t:0}°";
-            GpuTempBrush = Theme.Brush(t >= limit - 2 ? "Bad" : t >= limit - 10 ? "Warn" : "Good");
+            // With no stated limit, stay calm until the card is hot by anyone's measure.
+            double hot = limit - 2 ?? 95, warm = limit - 10 ?? 85;
+            GpuTempBrush = Theme.Brush(t >= hot ? "Bad" : t >= warm ? "Warn" : "Good");
         }
         else
         {
             GpuTempText = GpuAsleep ? "Asleep" : "--";
             GpuTempBrush = Theme.Brush("Muted");
         }
-        GpuLimitText = GpuAsleep ? "Not in use, so it is powered down." : $"target {limit:0}°C";
+        GpuLimitText = GpuAsleep ? "Not in use, so it is powered down." : limit is double lim ? $"target {lim:0}°C" : "";
         GpuThrottleText = s?.Throttle != null ? $"Slowing down because of {s.Throttle}." : "";
         // A power cap is routine on laptops; heat is worth a second look.
         GpuThrottleBrush = Theme.Brush(s?.Throttle?.Contains("heat") == true ? "Warn" : "Muted");

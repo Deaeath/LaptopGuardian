@@ -23,8 +23,10 @@ public enum CrashCause
     SleepTransition,
     /// <summary>Battery reached empty.</summary>
     BatteryRanOut,
-    /// <summary>Froze or lost power while in use; nothing recorded.</summary>
+    /// <summary>Stopped with no error, or the record cannot say how.</summary>
     Unknown,
+    /// <summary>Running one moment and restarting seconds later, with no error and no button press.</summary>
+    SuddenReset,
 }
 
 /// <summary>One thing that happened to the laptop, kept in the journal.</summary>
@@ -88,8 +90,14 @@ public sealed record GpuApp(string Name, int Pid, double UtilizationPct);
 public sealed class CrashInfo
 {
     public CrashCause Cause { get; set; }
-    /// <summary>The last moment Windows recorded itself as running (event 6008).</summary>
+    /// <summary>Which version of the reasoning produced this. Older entries are worked out again.</summary>
+    public int ClassifierVersion { get; set; }
+    /// <summary>Windows' stamp in event 6008. It is written only now and then, so it can be many minutes early.</summary>
     public DateTimeOffset? LastAlive { get; set; }
+    /// <summary>The last thing known to have happened: the flight recorder, or the newest log entry before the restart.</summary>
+    public DateTimeOffset? LastActivity { get; set; }
+    /// <summary>What the flight recorder last saw, if it was running.</summary>
+    public FlightSample? LastReading { get; set; }
     /// <summary>When Windows started again (event 41).</summary>
     public DateTimeOffset RestartedAt { get; set; }
     /// <summary>When it went to sleep, if it was asleep when it died.</summary>

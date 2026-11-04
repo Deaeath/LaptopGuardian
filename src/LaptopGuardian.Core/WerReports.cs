@@ -17,12 +17,15 @@ public sealed class KernelReport
     public DateTimeOffset FirstLogged { get; init; }
     public DateTimeOffset LastLogged { get; init; }
     public int TimesLogged { get; init; }
+    /// <summary>The log entries outlive the report, so a cleared report's old retries do not count.</summary>
+    public void MarkClearedAt(DateTimeOffset clearedAt) { if (LastLogged <= clearedAt) Stuck = false; }
     public string QueueFolder { get; init; } = "";
     public List<string> DumpFiles { get; init; } = new();
     /// <summary>When the snapshot was actually taken, read from the dump file's name.</summary>
     public DateTimeOffset? CapturedAt { get; init; }
     /// <summary>Windows keeps retrying it (every 4 hours) and logs each retry as if it were new.</summary>
-    public bool Stuck { get; init; }
+    public bool Stuck { get; private set; }
+    internal bool StuckValue { init => Stuck = value; }
 
     public DateTimeOffset HappenedAt => CapturedAt ?? FirstLogged;
 }
@@ -71,7 +74,7 @@ public static class WerReports
                 QueueFolder = StripLongPrefix(first.QueueFolder),
                 DumpFiles = dumps,
                 CapturedAt = dumps.Select(CapturedFromDumpName).FirstOrDefault(t => t != null),
-                Stuck = ordered.Count >= 3 && (last.Time - first.Time) >= TimeSpan.FromDays(1),
+                StuckValue = ordered.Count >= 3 && (last.Time - first.Time) >= TimeSpan.FromDays(1),
             });
         }
         return list.OrderByDescending(r => r.HappenedAt).ToList();
@@ -116,10 +119,14 @@ public static class WerReports
     /// Deletes the queued copies of the given reports, and the dumps they hold, so Windows stops retrying them.
     /// Only paths inside Windows' own report folders are touched. Needs administrator rights.
     /// </summary>
-    public static (int Reports, int Files, long Bytes, List<string> Errors) Clear(IEnumerable<KernelReport> reports)
+    public static (int Reports, int Files, long Bytes, List<string> Errors) Clear(IEnumerable<KernelReport> reports) => Clear(reports,
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Microsoft", "Windows", "WER"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "LiveKernelReports"));
+
+    internal static (int Reports, int Files, long Bytes, List<string> Errors) Clear(IEnumerable<KernelReport> reports, string queueFolderRoot, string dumpFolderRoot)
     {
-        string queueRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Microsoft", "Windows", "WER") + Path.DirectorySeparatorChar;
-        string dumpRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "LiveKernelReports") + Path.DirectorySeparatorChar;
+        string queueRoot = queueFolderRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        string dumpRoot = dumpFolderRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         int n = 0, files = 0; long bytes = 0; var errors = new List<string>();
 
         foreach (var r in reports)

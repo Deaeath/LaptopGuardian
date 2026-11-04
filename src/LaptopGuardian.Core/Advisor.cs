@@ -30,6 +30,8 @@ public static class Advisor
     public const string ActionEnableHibernate = "enable-hibernate";
     public const string ActionClearReports = "clear-reports";
     public const string ActionSleepStudy = "sleep-study";
+    /// <summary>Not an action on the PC: opens the Drivers page, where the steps and buttons are.</summary>
+    public const string ActionShowDrivers = "go:drivers";
     public const uint HibernateAfterSeconds = 20 * 60;
 
     public static List<Recommendation> Advise(Findings f)
@@ -43,13 +45,15 @@ public static class Advisor
         // 1. Dying in sleep: the one that loses work.
         if (asleep14.Count > 0)
         {
-            string title = asleep14.Count == 1 ? "It died while asleep" : $"It has died while asleep {asleep14.Count} times in two weeks";
+            string title = asleep14.Count == 1 ? "Your laptop died while asleep" : $"Your laptop died while asleep {asleep14.Count} times in two weeks";
             var body = new StringBuilder();
             body.Append(asleep14.Count == crashes14.Count
                 ? (crashes14.Count == 1 ? "The last unexpected shutdown happened during sleep. " : $"All {crashes14.Count} unexpected shutdowns in the last two weeks happened during sleep. ")
                 : $"{asleep14.Count} of {crashes14.Count} unexpected shutdowns in the last two weeks happened during sleep. ");
-            body.Append("Sleep on this laptop is Modern Standby, which needs every driver to wake cleanly; when one does not, the laptop hangs and you lose what was open. ");
-            body.Append("Hibernating saves everything to disk and powers off, so it cannot fail that way.");
+            body.Append(power?.ModernStandby == true
+                ? "Sleep on this laptop is Modern Standby, which needs every driver to wake cleanly; when one does not, the laptop hangs and you lose what was open. "
+                : "Sleep needs every driver to wake cleanly; when one does not, the laptop hangs and you lose what was open. ");
+            body.Append("Hibernating saves everything to disk and powers off, so there is nothing that has to wake.");
 
             if (power is { HibernateAvailable: false })
                 list.Add(new Recommendation("sleep-deaths", Severity.Critical, title,
@@ -69,6 +73,24 @@ public static class Advisor
                     "Open the sleep study", ActionSleepStudy));
         }
 
+        // 1b. Sudden resets and unexplained stops: the record cannot name a cause, so say how to narrow it down.
+        var unexplained = crashes14.Where(c => c.Crash?.Cause is CrashCause.SuddenReset or CrashCause.Unknown).OrderByDescending(c => c.Time).ToList();
+        if (unexplained.Count > 0)
+        {
+            int resets = unexplained.Count(c => c.Crash?.Cause == CrashCause.SuddenReset);
+            string title = resets == unexplained.Count
+                ? (resets == 1 ? "Your laptop reset itself without warning" : $"Your laptop reset itself {resets} times in two weeks")
+                : (unexplained.Count == 1 ? "Your laptop stopped without warning" : $"Your laptop stopped without warning {unexplained.Count} times in two weeks");
+            string reading = unexplained.Select(c => c.Crash?.LastReading).FirstOrDefault(r => r != null) is FlightSample s
+                ? $" The last reading before the most recent one: {s.Describe()}"
+                : " LaptopGuardian now records temperatures and load every 10 seconds, so the next one will show what the laptop was doing.";
+            list.Add(new Recommendation("sudden-resets", Severity.Critical, title,
+                "Windows recorded no error, which points to something below Windows: heat protection, the power system, memory, or a hardware fault." + reading +
+                " To narrow it down, use the laptop for a few hours without games or other heavy work. If that stops it, suspect heat or power under load: clear the vents, raise the back of the laptop, use a lower performance mode, and cap the frame rate. " +
+                "If it still happens, test the memory, then send the health report to your laptop maker's support.",
+                LinkLabel: "Test the memory", LinkUrl: "mdsched.exe"));
+        }
+
         // 2. BIOS: the usual fix for sleep and stability problems on laptops. Ask the maker when we can.
         var bios = f.System.BiosDate;
         var biosUpdate = f.Drivers?.Updates.FirstOrDefault(u => u.Key.StartsWith("bios:", StringComparison.Ordinal));
@@ -76,9 +98,9 @@ public static class Advisor
         {
             list.Add(new Recommendation("bios", crashes14.Count > 0 ? Severity.Warning : Severity.Info,
                 $"BIOS {biosUpdate.Available} is available",
-                $"You have BIOS {biosUpdate.Installed}; {Short(f.System.Manufacturer)} released {biosUpdate.Available}{(biosUpdate.Released is DateTime br ? $" on {br:MMMM d, yyyy}" : "")}. " +
-                "BIOS updates fix sleep, wake and stability problems. Plug in the charger before you run it, and do not turn the laptop off while it updates.",
-                LinkLabel: "Download the BIOS update", LinkUrl: biosUpdate.Url));
+                $"You have BIOS {biosUpdate.Installed}; {f.System.Maker} released {biosUpdate.Available}{(biosUpdate.Released is DateTime br ? $" on {br:MMMM d, yyyy}" : "")}. " +
+                "BIOS updates fix sleep, wake and stability problems.",
+                "Show me how", ActionShowDrivers));
         }
         else if (f.Drivers?.BiosIsLatest == true)
         {
@@ -88,7 +110,7 @@ public static class Advisor
         {
             string where = f.System.IsAsus
                 ? "Open MyASUS or Armoury Crate and check for updates, or search ASUS support for your model."
-                : $"Check {Short(f.System.Manufacturer)}'s support site for your model.";
+                : $"Check {f.System.Maker}'s support site for your model.";
             list.Add(new Recommendation("bios", Severity.Warning, "Check for a BIOS update",
                 $"Your BIOS ({f.System.BiosVersion}) is from {bd:MMMM yyyy}. Laptop makers fix sleep, wake and stability problems in BIOS updates. {where}",
                 LinkLabel: "Search for your BIOS",
@@ -104,10 +126,15 @@ public static class Advisor
             list.Add(new Recommendation("nvidia-driver", troubled ? Severity.Warning : Severity.Info,
                 $"NVIDIA driver {nvidia.Available} is available",
                 $"You have {nvidia.Installed}; NVIDIA released {nvidia.Available}{(nvidia.Released is DateTime nr ? $" on {nr:MMMM d}" : "")}. " +
-                (troubled ? "New drivers often fix graphics resets and failed wakes from sleep. " : "") +
-                "Install it from the NVIDIA app or the download page; choose a clean installation if you have had graphics errors.",
-                LinkLabel: "NVIDIA download page", LinkUrl: nvidia.Url));
+                (troubled ? "New drivers often fix graphics resets and crashes." : "It takes a few minutes."),
+                "Show me how", ActionShowDrivers));
         }
+        var amdUpdate = f.Drivers?.Updates.FirstOrDefault(u => u.Source == "AMD");
+        if (amdUpdate != null)
+            list.Add(new Recommendation("amd-driver", gfx14.Count > 0 || crashes14.Count > 0 ? Severity.Warning : Severity.Info,
+                $"AMD driver {amdUpdate.Available} is available",
+                $"You have AMD Software {amdUpdate.Installed}; AMD lists {amdUpdate.Available}. It takes a few minutes.",
+                "Show me how", ActionShowDrivers));
 
         // 4. Driver updates Windows Update has waiting, and devices with driver problems.
         var wu = f.Drivers?.Updates.Where(u => u.Source == "Windows Update").ToList() ?? new();
@@ -183,9 +210,6 @@ public static class Advisor
             .ToList();
     }
 
-    static string Short(string manufacturer) =>
-        manufacturer.Replace("COMPUTER INC.", "", StringComparison.OrdinalIgnoreCase).Replace("Inc.", "", StringComparison.OrdinalIgnoreCase).Trim();
-
     /// <summary>One line for the status banner and tray tooltip.</summary>
     public static (Severity Level, string Headline, string Summary) Status(Findings f, IReadOnlyList<Recommendation> recs)
     {
@@ -194,8 +218,11 @@ public static class Advisor
         if (crashes7.Count > 0)
         {
             int asleep = crashes7.Count(c => c.Crash != null && CrashScanner.IsAsleepCause(c.Crash.Cause));
+            int resets = crashes7.Count(c => c.Crash?.Cause == CrashCause.SuddenReset);
             string tail = asleep == crashes7.Count ? (crashes7.Count == 1 ? ", while asleep" : ", all while asleep")
-                : asleep > 0 ? $", {asleep} while asleep" : "";
+                : asleep > 0 ? $", {asleep} while asleep"
+                : resets == crashes7.Count ? (resets == 1 ? ", a sudden reset" : ", all sudden resets")
+                : resets > 0 ? $", {resets} of them sudden resets" : "";
             return (Severity.Critical, "Needs attention",
                 $"{Fmt.Plural(crashes7.Count, "unexpected shutdown", "unexpected shutdowns")} this week{tail}." +
                 (gfx7.Count > 0 ? $" {Fmt.Plural(gfx7.Count, "graphics error", "graphics errors")}." : ""));
