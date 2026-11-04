@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.1
+
+### New
+- **The flight recorder now watches the processor too:** how busy it is, whether it has slowed itself down (its speed against its maximum), and which apps are using it most. A reset with the graphics card nearly idle showed that the processor side was a blind spot.
+- **The graphics card's fan speed** is recorded where the driver reports it.
 ## 2.2.0
 
 **Update from 2.1.0: it could wrongly say a crash happened while the laptop was asleep.**

@@ -64,6 +64,7 @@ public sealed class GpuSnapshot
     public double? PowerLimitW { get; set; }
     /// <summary>Why the card is holding its clocks back, in words ("heat", "its power limit"), if it is.</summary>
     public string? Throttle { get; set; }
+    public double? FanRpm { get; set; }
     public bool Asleep { get; set; }
     public List<GpuApp> TopApps { get; set; } = new();
 

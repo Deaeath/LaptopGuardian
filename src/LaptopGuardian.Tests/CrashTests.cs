@@ -176,6 +176,27 @@ public class FlightRecorderTests
     }
 
     [Fact]
+    public void A_reading_says_what_the_processor_was_doing_too()
+    {
+        var s = new FlightSample { ZoneC = 98, CpuBusyPct = 85, CpuSpeedPct = 61, TopCpuApps = "Game.exe 40%", GpuC = 69, GpuFanRpm = 0 };
+        string d = s.Describe();
+        Assert.Contains("processor 85% busy at 61% of its top speed", d);
+        Assert.Contains("Busiest on the processor: Game.exe 40%", d);
+        Assert.Contains("fan at 0 rpm", d);
+    }
+
+    [Fact]
+    public void The_processor_sampler_reports_after_its_first_call()
+    {
+        using var cpu = new CpuSampler();
+        var first = cpu.Sample();
+        Assert.Null(first.Busy);
+        Thread.Sleep(300);
+        var second = cpu.Sample();
+        Assert.NotNull(second.Busy);
+        Assert.InRange(second.Busy!.Value, 0, 100);
+    }
+    [Fact]
     public void It_stays_small()
     {
         string dir = Path.Combine(Path.GetTempPath(), "lg-test-" + Guid.NewGuid().ToString("N"));

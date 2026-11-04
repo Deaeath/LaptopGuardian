@@ -75,6 +75,7 @@ public sealed class GpuMonitor : IDisposable
 
         var snap = new GpuSnapshot { At = DateTimeOffset.Now, Name = a.Name, MemoryTotalGB = a.DedicatedBytes > 0 ? a.DedicatedBytes / 1073741824.0 : null };
         if (a.TemperatureDeciC > 0) snap.TemperatureC = a.TemperatureDeciC / 10.0;
+        if (a.FanRpm > 0) snap.FanRpm = a.FanRpm;
 
         if (!_countersWarm)
         {

@@ -42,6 +42,7 @@ public sealed class Guardian : IDisposable
     Timer? _driverTimer, _recorderTimer;
     FlightRecorder Recorder => _recorder ??= new FlightRecorder(_dataDir == null ? null : Path.Combine(_dataDir, "flight-recorder.jsonl"));
     FlightRecorder? _recorder;
+    readonly CpuSampler _cpu = new();
     volatile string _powerState = "awake";
     /// <summary>The firmware's thermal sensor, as last recorded.</summary>
     public double? ThermalZoneC { get; private set; }
@@ -50,6 +51,7 @@ public sealed class Guardian : IDisposable
     {
         var (pct, ac) = PowerStatus();
         ThermalZoneC = FlightRecorder.ReadThermalZone();
+        var (cpuBusy, cpuSpeed, cpuTop) = _cpu.Sample();
         var g = Gpu.Latest;
         if (g != null && DateTimeOffset.Now - g.At > TimeSpan.FromMinutes(1)) g = null;
         Recorder.Write(new FlightSample
@@ -57,12 +59,16 @@ public sealed class Guardian : IDisposable
             At = DateTimeOffset.Now,
             State = _powerState,
             ZoneC = ThermalZoneC,
+            CpuBusyPct = cpuBusy,
+            CpuSpeedPct = cpuSpeed,
+            TopCpuApps = cpuTop,
             GpuC = g?.TemperatureC,
             GpuLimitC = g?.TemperatureLimitC,
             GpuBusyPct = g?.UtilizationPct is double u ? Math.Round(u) : null,
             GpuMemoryPct = g?.MemoryPct is double m ? Math.Round(m) : null,
             GpuW = g?.PowerW is double w ? Math.Round(w) : null,
             Throttle = g?.Throttle,
+            GpuFanRpm = g?.FanRpm,
             OnAc = ac,
             BatteryPct = pct,
             TopApps = g == null || g.TopApps.Count == 0 ? null : string.Join(", ", g.TopApps.Take(3).Select(a => $"{a.Name} {a.UtilizationPct:0}%")),
@@ -633,6 +639,7 @@ public sealed class Guardian : IDisposable
         _rescanTimer?.Dispose();
         _driverTimer?.Dispose();
         _recorderTimer?.Dispose();
+        _cpu.Dispose();
         try { Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged; } catch { }
         Gpu.Dispose();
         Keyboard.Dispose();
