@@ -34,7 +34,7 @@ else {
     $start = [Array]::FindIndex($lines, [Predicate[string]] { param($l) $l -like "## $Version*" })
     $section = @()
     if ($start -ge 0) { for ($i = $start + 1; $i -lt $lines.Count -and $lines[$i] -notlike '## *'; $i++) { $section += $lines[$i] } }
-    $body = "<p align=`"center`"><a href=`"https://github.com/$Repo/releases/download/$Tag/LaptopGuardian.exe`"><img src=`"https://img.shields.io/badge/Download_for_Windows-LaptopGuardian.exe-2F8FE8?style=for-the-badge`" alt=`"Download LaptopGuardian.exe`"></a></p>`n`n" + ($section -join "`n")
+    $body = "<p align=`"center`"><a href=`"https://github.com/$Repo/releases/download/$Tag/LaptopGuardian.exe`"><img src=`"https://img.shields.io/badge/Download_for_Windows-1F6FEB?style=for-the-badge`" alt=`"Download LaptopGuardian.exe`"></a></p>`n`n" + ($section -join "`n")
 }
 
 $tail = @"
