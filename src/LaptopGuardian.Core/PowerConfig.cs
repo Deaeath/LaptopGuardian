@@ -35,6 +35,43 @@ public static class PowerConfig
 
     public const uint ActionNothing = 0, ActionSleep = 1, ActionHibernate = 2, ActionShutDown = 3, ActionDisplayOff = 4;
 
+    static readonly Guid SubProcessor = new("54533251-82be-4824-96c1-47b60b740d00");
+    static readonly Guid PerfBoostMode = new("be337238-0d82-4146-a960-4f3749d470c7");
+    /// <summary>Processor boost modes. Windows' usual default is Aggressive.</summary>
+    public const uint BoostOff = 0, BoostAggressive = 2;
+
+    public static string BoostName(uint? mode) => mode switch
+    {
+        null => "Unknown",
+        0 => "Off",
+        1 => "On",
+        2 => "Aggressive",
+        3 => "Efficient",
+        4 => "Efficient aggressive",
+        5 => "Aggressive at guaranteed",
+        6 => "Efficient aggressive at guaranteed",
+        _ => $"Mode {mode}",
+    };
+
+    /// <summary>Processor boost in the active plan, plugged in and on battery.</summary>
+    public static (uint? Ac, uint? Dc) ReadBoost()
+    {
+        if (PowerGetActiveScheme(IntPtr.Zero, out var p) != 0 || p == IntPtr.Zero) return (null, null);
+        var scheme = Marshal.PtrToStructure<Guid>(p);
+        LocalFree(p);
+        var sub = SubProcessor;
+        var setting = PerfBoostMode;
+        uint? ac = PowerReadACValueIndex(IntPtr.Zero, ref scheme, ref sub, ref setting, out var a) == 0 ? a : null;
+        uint? dc = PowerReadDCValueIndex(IntPtr.Zero, ref scheme, ref sub, ref setting, out var d) == 0 ? d : null;
+        return (ac, dc);
+    }
+
+    /// <summary>
+    /// Sets processor boost in every power plan. Off keeps the processor at its base speed, which on an overheating
+    /// laptop removes the bursts that trip its heat protection; Windows obeys it where its clock limits are ignored.
+    /// </summary>
+    public static uint SetBoost(uint ac, uint dc, bool bestEffort = false) => Write(SubProcessor, PerfBoostMode, ac, dc, bestEffort);
+
     public static string ActionName(uint? a) => a switch
     {
         null => "Unknown",

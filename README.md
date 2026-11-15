@@ -64,6 +64,7 @@ It also lists devices with driver problems, in words.
 - **Watches the graphics card live**: temperature against the driver's own target, load, memory and power. It warns when the card stays at its limit or runs out of memory, and it does not wake a sleeping graphics card to do so.
 - **Checks power and battery**: battery wear, sleep type, and sleep, hibernate and lid settings across every power plan.
 - **Notices a charger that keeps cutting out.** Windows logs every switch between charger and battery and says nothing about it. LaptopGuardian records drops too short to be someone unplugging it, warns when they come in bursts, and says when one came in the hour before a crash.
+- **Keeps an overheating laptop running.** It recognises a shutdown caused by the laptop's own heat protection, notices it running hot while doing nothing (often Windows' "Best performance" power mode), and its optional heat governor holds the busiest apps back when it gets too hot.
 - **Lets you dismiss alerts.** A dismissed alert leaves the Overview and the status but stays in the timeline, where you can bring it back. A hidden suggestion comes back if the problem happens again.
 - **Filters keyboard chatter** for keyboards that type letters twice.
 - **Exports a health report** to send to your laptop maker's support.

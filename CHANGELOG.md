@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.4.0
+
+**For laptops that switch themselves off from heat.**
+
+### New
+- **Heat page**, second in the menu. The thermal sensor live with the last 15 minutes, the heat governor, your app caps, the settings that make heat, overheating shutdowns, and the history of all of it. Everything on it works on any Windows laptop, whatever its maker.
+- **Heat governor** (off by default). When the laptop passes a temperature you choose (88°C by default), or after 15 seconds of near-full load, it holds back the busiest apps (up to 5): each to half of what it is using (never more than a share you choose, 40% by default), a quarter less every 5 seconds while the laptop stays hot, down to 5%. It lets go once the laptop has cooled. Windows' own processes are never touched. Each time it steps in, it says so. Windows' own clock limits (maximum processor state, maximum frequency, core parking) are ignored by some processors; the governor's per-app caps are not.
+- **App caps.** A table of the apps using the processor, where you can give any app its own cap, keep it capped all the time, or tell the governor never to touch it.
+- **Processor boost switch.** Turning boost off keeps the processor at its base speed in every power plan, which removes the bursts that trip an overheating laptop's protection. Turning it back on restores what it was.
+- **"Overheated and switched off".** A new verdict for a shutdown whose last flight recorder reading was 95°C or more, with a suggestion that turns the heat governor on in one click. Existing entries are worked out again.
+- **Windows' power mode.** LaptopGuardian reads it (and records it every 10 seconds), shows it on the Power page with a picker, and notices the laptop running hot while doing nothing: on "Best performance" the processor can sit near full speed at idle. A suggestion switches to Best power efficiency in one click, and warns that Armoury Crate's "Power mode synchronization" switches it back.
+- The health report lists the power mode and any stretches of running hot while idle.
+
 ## 2.3.0
 
 ### New

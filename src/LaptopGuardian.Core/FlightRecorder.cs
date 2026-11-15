@@ -27,6 +27,8 @@ public sealed record FlightSample
     public bool? OnAc { get; init; }
     public int? BatteryPct { get; init; }
     public string? TopApps { get; init; }
+    /// <summary>Windows' power mode at the time, e.g. "Best performance".</summary>
+    public string? PowerMode { get; init; }
 
     public string Describe()
     {
@@ -39,6 +41,7 @@ public sealed record FlightSample
         if (GpuW is double w) p.Add($"drawing {w:0} W");
         if (GpuFanRpm is double f) p.Add($"its fan at {f:0} rpm");
         if (OnAc is bool ac) p.Add(ac ? "plugged in" : $"on battery{(BatteryPct is int pct ? $" at {pct}%" : "")}");
+        if (!string.IsNullOrEmpty(PowerMode)) p.Add($"Windows power mode {PowerMode}");
         string s = string.Join(", ", p);
         if (Throttle != null) s += $" (held back by {Throttle})";
         if (!string.IsNullOrEmpty(TopCpuApps)) s += $". Busiest on the processor: {TopCpuApps}";
@@ -161,6 +164,26 @@ public sealed class FlightRecorder
             catch (Exception ex) { Debug.WriteLine(ex); }
         }
         return best;
+    }
+
+    /// <summary>Every sample from the last <paramref name="within"/>, oldest first.</summary>
+    public List<FlightSample> Since(DateTimeOffset now, TimeSpan within)
+    {
+        var list = new List<FlightSample>();
+        if (_path == null) return list;
+        foreach (var file in new[] { _path + ".1", _path })
+        {
+            try
+            {
+                if (!File.Exists(file)) continue;
+                using var f = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var r = new StreamReader(f, Encoding.UTF8);
+                for (string? line = r.ReadLine(); line != null; line = r.ReadLine())
+                    if (Parse(line) is FlightSample s && s.At <= now && now - s.At <= within) list.Add(s);
+            }
+            catch (Exception ex) { Debug.WriteLine(ex); }
+        }
+        return list.OrderBy(s => s.At).ToList();
     }
 
     /// <summary>A sudden reset can leave half a line behind; that line is simply skipped.</summary>

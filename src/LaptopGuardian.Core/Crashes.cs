@@ -98,8 +98,14 @@ public sealed record CrashVerdict(CrashCause Cause, string Title, string Summary
 public static class CrashClassifier
 {
     /// <summary>Raise this when the reasoning changes, so existing entries are worked out again.</summary>
-    /// <remarks>3: says when the charger cut out in the hour before.</remarks>
-    public const int Version = 3;
+    /// <remarks>3: says when the charger cut out in the hour before. 4: "Overheated" from the flight recorder's last reading.</remarks>
+    public const int Version = 4;
+
+    /// <summary>
+    /// A last reading this hot means the laptop's own heat protection is the likely cause. On 15 November 2026 the
+    /// last readings before four power cuts were 96-106°C, each with nothing in the log.
+    /// </summary>
+    public const double OverheatC = 95;
 
     /// <summary>Stop codes raised by a failed sleep or wake: Modern Standby watchdogs and driver power transitions.</summary>
     public static readonly uint[] SleepStopCodes = { 0x14F, 0x15F, 0x9F, 0xA0 };
@@ -173,6 +179,18 @@ public static class CrashClassifier
                 "Plug in sooner, or turn on hibernation so Windows saves your work before the battery empties.",
                 Severity.Warning);
 
+        // The reading has to be the last thing that happened, not one from long before the stop.
+        if (f.LastReading is { ZoneC: double z } hot && z >= OverheatC &&
+            (f.LastActivity is not DateTimeOffset last || last - hot.At <= TimeSpan.FromSeconds(30)))
+        {
+            string slowed = hot.CpuSpeedPct is double sp && sp < 60 ? $", the processor already slowing itself to {sp:0}% of its speed," : "";
+            var gap = f.RestartedAt - hot.At;
+            return new CrashVerdict(CrashCause.Overheated, "Overheated and switched off",
+                $"The laptop's thermal sensor read {z:0}°C at {Fmt.Clock(hot.At)}{slowed} and the next thing it did was start up again" +
+                (gap < TimeSpan.FromHours(1) ? $" {Fmt.Span(gap)} later" : "") + $". Windows recorded no error and no press of the power button.{power}{reading}{gfx}",
+                OverheatAdvice, Severity.Critical);
+        }
+
         if (f.LastActivity is DateTimeOffset act && f.RestartedAt - act <= SuddenResetWithin)
             return new CrashVerdict(CrashCause.SuddenReset, "Reset itself without warning",
                 $"It was running at about {Fmt.Clock(act)} and starting up again {Fmt.Span(f.RestartedAt - act)} later. Windows recorded no error and no press of the power button.{power}{reading}{gfx}",
@@ -188,6 +206,11 @@ public static class CrashClassifier
         "The laptop was asleep and never came back: it hung while asleep or while waking, and the next thing it did was a cold start. " +
         "The usual suspects are the BIOS and drivers, especially the graphics driver, failing a sleep or wake transition. " +
         "Hibernating does not depend on waking from sleep, so it is the safer choice until a BIOS or driver update fixes it.";
+
+    const string OverheatAdvice =
+        "Laptops switch themselves off when the processor gets too hot, to protect it, and that leaves nothing in Windows' log. " +
+        "If it happens under light work, the cooling is failing: dust in the fans, or worn thermal paste between the processor and its cooler, which needs a repair. " +
+        "Until then, open LaptopGuardian's Heat page: turn on the heat governor, and turn off processor boost.";
 
     const string ResetAdvice =
         "A restart this fast, with no error, means Windows never got the chance to report anything. A driver crash normally leaves a stop code, " +

@@ -364,6 +364,172 @@
                         </Border>
                     </StackPanel>
 
+                    <!-- ======================== Heat -->
+                    <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=heat}">
+                        <TextBlock Style="{StaticResource PageTitle}" Text="Heat" />
+                        <TextBlock Style="{StaticResource PageLead}" Text="When the processor gets too hot, a laptop switches itself off to protect it, and Windows records nothing but an unexpected shutdown. This page shows how hot it runs, holds apps back before it gets there, and lets you set your own caps. All of it works on any Windows laptop." />
+
+                        <Border Background="{Binding HeatTint}" BorderBrush="{Binding HeatBannerBrush}" BorderThickness="1" CornerRadius="10" Padding="22,18">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding HeatNowText}" FontSize="40" FontWeight="SemiBold" Foreground="{Binding HeatBrush}" VerticalAlignment="Center" />
+                                <StackPanel Grid.Column="1" Margin="22,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding HeatHeadline}" FontSize="19" FontWeight="SemiBold" />
+                                    <TextBlock Text="{Binding HeatSummary}" Style="{StaticResource Body}" Foreground="{DynamicResource Muted}" Margin="0,3,0,0" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                        <UniformGrid Columns="3" Margin="-7,14,-7,0">
+                            <Border Style="{StaticResource Card}" Margin="7">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource CardLabel}" Text="Thermal sensor" />
+                                    <TextBlock Style="{StaticResource Big}" Text="{Binding HeatNowText}" Foreground="{Binding HeatBrush}" Margin="0,6,0,0" />
+                                    <local:Sparkline Values="{Binding HeatSeries}" Minimum="30" Maximum="110" Slots="90" Stroke="{Binding HeatBrush}" Height="40" Margin="0,4,0,10" />
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding HeatRangeText}" />
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding HeatLoadText}" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Card}" Margin="7">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource CardLabel}" Text="Heat governor" />
+                                    <TextBlock Style="{StaticResource Big}" Text="{Binding GovernorStateText}" Foreground="{Binding GovernorStateBrush}" Margin="0,6,0,0" />
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding GovernorStatus}" Margin="0,8,0,0" />
+                                    <CheckBox Style="{StaticResource Switch}" Content="On" IsChecked="{Binding HeatGovernorOn, Mode=TwoWay}" Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Border>
+                            <Border Style="{StaticResource Card}" Margin="7">
+                                <StackPanel>
+                                    <TextBlock Style="{StaticResource CardLabel}" Text="Overheating shutdowns this week" />
+                                    <TextBlock Style="{StaticResource Big}" Text="{Binding Overheat7Text}" Foreground="{Binding Overheat7Brush}" Margin="0,6,0,0" />
+                                    <TextBlock Style="{StaticResource Small}" Text="{Binding OverheatDetailText}" Margin="0,8,0,0" />
+                                    <Button Style="{StaticResource LinkButton}" Content="See every shutdown" Command="{Binding NavigateCommand}" CommandParameter="shutdowns"
+                                            HorizontalAlignment="Left" Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Border>
+                        </UniformGrid>
+
+                        <TextBlock Style="{StaticResource Section}" Text="Heat governor" />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <CheckBox Style="{StaticResource Switch}" Content="Hold back the busiest apps when the laptop gets too hot" IsChecked="{Binding HeatGovernorOn, Mode=TwoWay}" />
+                                <WrapPanel Margin="0,12,0,0" IsEnabled="{Binding HeatGovernorOn}">
+                                    <TextBlock Text="Step in at" Style="{StaticResource Small}" Foreground="{DynamicResource Text}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                    <ComboBox ItemsSource="{Binding GovernorThresholds}" SelectedItem="{Binding GovernorCapAtC, Mode=TwoWay}" ItemStringFormat="{}{0}°C" MinWidth="100" Margin="0,0,24,0" />
+                                    <TextBlock Text="An app gets at most" Style="{StaticResource Small}" Foreground="{DynamicResource Text}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                    <ComboBox ItemsSource="{Binding GovernorCapOptions}" SelectedItem="{Binding GovernorCapPercent, Mode=TwoWay}" ItemStringFormat="{}{0}% of the processor" MinWidth="190" />
+                                </WrapPanel>
+                                <TextBlock Style="{StaticResource Small}" Margin="0,12,0,0"
+                                           Text="Past that temperature, or after 15 seconds of near-full load, it holds back the busiest apps (apps you gave a cap of their own go first): each to half of what it is using, then a quarter less every 5 seconds while the laptop stays hot, down to 5%. Up to 5 apps at a time. It lets go once the laptop has cooled, at least 2 minutes later. Windows' own processes are never touched. It is a stopgap: a laptop that overheats under ordinary work needs its cooling cleaned or repaired." />
+                            </StackPanel>
+                        </Border>
+
+                        <DockPanel Margin="0,0,0,0">
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Bottom" Margin="0,0,0,12">
+                                <Button Style="{StaticResource SubtleButton}" Command="{Binding RefreshCapsCommand}" Margin="0,0,10,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" />
+                                        <TextBlock Text="Refresh" Margin="8,0,0,0" />
+                                    </StackPanel>
+                                </Button>
+                                <Button Style="{StaticResource AccentButton}" Command="{Binding SaveCapsCommand}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE74E;" FontSize="13" VerticalAlignment="Center" />
+                                        <TextBlock Text="Save caps" Margin="8,0,0,0" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                            <TextBlock Style="{StaticResource Section}" Text="App caps" />
+                        </DockPanel>
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource Small}" Margin="0,0,0,12"
+                                           Text="Give an app its own share of the processor. Cap: the most it gets when it is capped (Default uses the governor's). Always: capped all the time, not only when the laptop is hot; all of its windows share a few cores, so the cap holds for the whole app. Never cap: the governor leaves it alone (a game you are playing, for example)." />
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="210" />
+                                        <ColumnDefinition Width="100" />
+                                        <ColumnDefinition Width="130" />
+                                        <ColumnDefinition Width="80" />
+                                        <ColumnDefinition Width="100" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="APP" Style="{StaticResource CardLabel}" />
+                                    <TextBlock Grid.Column="1" Text="USING NOW" Style="{StaticResource CardLabel}" />
+                                    <TextBlock Grid.Column="2" Text="CAP" Style="{StaticResource CardLabel}" />
+                                    <TextBlock Grid.Column="3" Text="ALWAYS" Style="{StaticResource CardLabel}" />
+                                    <TextBlock Grid.Column="4" Text="NEVER CAP" Style="{StaticResource CardLabel}" />
+                                    <TextBlock Grid.Column="5" Text="RIGHT NOW" Style="{StaticResource CardLabel}" />
+                                </Grid>
+                                <ItemsControl ItemsSource="{Binding AppCapRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{DynamicResource Stroke}" BorderThickness="0,1,0,0" Padding="0,7">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="210" />
+                                                        <ColumnDefinition Width="100" />
+                                                        <ColumnDefinition Width="130" />
+                                                        <ColumnDefinition Width="80" />
+                                                        <ColumnDefinition Width="100" />
+                                                        <ColumnDefinition Width="*" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="{Binding Display}" FontSize="13.5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,0,10,0" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding UsingText}" Style="{StaticResource Small}" VerticalAlignment="Center" />
+                                                    <ComboBox Grid.Column="2" ItemsSource="{Binding Options}" SelectedItem="{Binding CapChoice, Mode=TwoWay}" Width="110" HorizontalAlignment="Left" />
+                                                    <CheckBox Grid.Column="3" IsChecked="{Binding Always, Mode=TwoWay}" VerticalAlignment="Center" Margin="12,0,0,0" />
+                                                    <CheckBox Grid.Column="4" IsChecked="{Binding Never, Mode=TwoWay}" VerticalAlignment="Center" Margin="22,0,0,0" />
+                                                    <TextBlock Grid.Column="5" Text="{Binding Status}" Style="{StaticResource Small}" VerticalAlignment="Center" />
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock Style="{StaticResource FaintText}" Text="{Binding CapsNote}" Margin="0,10,0,0" />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource Section}" Text="Settings that make heat" />
+                        <Border Style="{StaticResource Card}">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Windows' power mode" Style="{StaticResource Small}" Foreground="{DynamicResource Text}" VerticalAlignment="Center" Margin="0,0,12,0" />
+                                    <ComboBox ItemsSource="{Binding PowerModeOptions}" SelectedItem="{Binding PowerModeChoice, Mode=TwoWay}" MinWidth="220" />
+                                </StackPanel>
+                                <TextBlock Style="{StaticResource Small}" Text="{Binding PowerModeText}" Foreground="{Binding PowerModeBrush}" Margin="0,10,0,0" />
+                                <TextBlock Style="{StaticResource Small}" Margin="0,6,0,0"
+                                           Text="Best performance holds the processor near full speed even with nothing to do, so the laptop makes heat all the time. Best power efficiency lets it slow down when idle. This sets the mode for the power source in use now. Some laptop makers' apps switch it back with their performance modes." />
+
+                                <Border BorderBrush="{DynamicResource Stroke}" BorderThickness="0,1,0,0" Margin="0,16,0,0" Padding="0,16,0,0">
+                                    <StackPanel>
+                                        <CheckBox Style="{StaticResource Switch}" Content="Let the processor boost above its base speed" IsChecked="{Binding BoostOn, Mode=TwoWay}" />
+                                        <TextBlock Style="{StaticResource Small}" Text="{Binding BoostText}" Margin="0,8,0,0" />
+                                        <TextBlock Style="{StaticResource Small}" Margin="0,6,0,0"
+                                                   Text="Boosting bursts the processor far past its base speed, and on a laptop whose cooling cannot keep up, those bursts are what trip its heat protection. Turning boost off keeps it at its base speed in every power plan: programs that need full speed run slower, and the laptop runs much cooler. Windows obeys this even on processors that ignore its other speed limits." />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource Section}" Text="If it keeps overheating" />
+                        <Border Style="{StaticResource Card}">
+                            <TextBlock Style="{StaticResource Body}"
+                                       Text="A laptop that gets hot doing ordinary work has a cooling problem, not a software one. Blow the dust out of the vents with compressed air, with the laptop off, and check that the fans spin up under load. If it still jumps tens of degrees within seconds, the thermal paste between the processor and its cooler has worn out or shifted: a repair shop can replace it. Until then, the governor, your caps and boost off keep it running." />
+                        </Border>
+
+                        <TextBlock Style="{StaticResource Section}" Text="Heat history" />
+                        <Border Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
+                            <Grid>
+                                <ItemsControl ItemsSource="{Binding HeatEvents}" ItemTemplate="{StaticResource IncidentRow}" Margin="0,0,0,-1" />
+                                <TextBlock Text="Nothing yet. Overheating shutdowns, the governor stepping in and stretches of running hot while idle show up here." Style="{StaticResource Small}" Margin="20,16"
+                                           Visibility="{Binding HeatEvents, Converter={StaticResource Has}, ConverterParameter=inverse}" />
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+
                     <!-- ======================== Timeline -->
                     <StackPanel Visibility="{Binding Page, Converter={StaticResource Page}, ConverterParameter=timeline}">
                         <TextBlock Style="{StaticResource PageTitle}" Text="Timeline" />
@@ -681,7 +847,7 @@
                                 <TextBlock Style="{StaticResource CardLabel}" Text="Tell me when" Margin="0,0,0,10" />
                                 <CheckBox Style="{StaticResource Switch}" Content="The laptop shut down unexpectedly" IsChecked="{Binding NotifyCrashes, Mode=TwoWay}" />
                                 <CheckBox Style="{StaticResource Switch}" Content="The graphics driver reports an error" IsChecked="{Binding NotifyGraphics, Mode=TwoWay}" />
-                                <CheckBox Style="{StaticResource Switch}" Content="The graphics card stays at its temperature limit" IsChecked="{Binding NotifyHeat, Mode=TwoWay}" />
+                                <CheckBox Style="{StaticResource Switch}" Content="The laptop runs hot (graphics card at its limit, or hot while doing nothing)" IsChecked="{Binding NotifyHeat, Mode=TwoWay}" />
                                 <CheckBox Style="{StaticResource Switch}" Content="Graphics memory is nearly full" IsChecked="{Binding NotifyMemory, Mode=TwoWay}" />
                                 <CheckBox Style="{StaticResource Switch}" Content="The battery is low" IsChecked="{Binding NotifyBattery, Mode=TwoWay}" />
                                 <CheckBox Style="{StaticResource Switch}" Content="The charger keeps cutting out" IsChecked="{Binding NotifyCharger, Mode=TwoWay}" />

@@ -13,6 +13,14 @@ public sealed record Findings
     public GpuSnapshot? Gpu { get; init; }
     public DriverReport? Drivers { get; init; }
     public DateTimeOffset Now { get; init; } = DateTimeOffset.Now;
+    /// <summary>Windows' power mode in force now.</summary>
+    public WindowsPowerMode PowerMode { get; init; }
+    public PowerModeSettings? PowerModes { get; init; }
+    /// <summary>Stretches of running hot with nothing to do, from the flight recorder.</summary>
+    public IReadOnlyList<HeatSpell> IdleHeat { get; init; } = Array.Empty<HeatSpell>();
+    public bool GovernorOn { get; init; }
+    /// <summary>Processor boost plugged in (0 is off).</summary>
+    public uint? BoostAc { get; init; }
 
     public IEnumerable<Incident> Crashes(TimeSpan within) =>
         Incidents.Where(i => i.Kind == IncidentKind.UnexpectedShutdown && Now - i.Time <= within);
@@ -40,9 +48,18 @@ public static class Advisor
     public const string ActionEnableHibernate = "enable-hibernate";
     public const string ActionClearReports = "clear-reports";
     public const string ActionSleepStudy = "sleep-study";
+    public const string ActionPowerEfficiency = "power-mode-efficiency";
+    public const string ActionGovernorOn = "heat-governor-on";
+    /// <summary>Not an action on the PC: opens the Heat page.</summary>
+    public const string ActionShowHeat = "go:heat";
+    public const string PowerSettingsUri = "ms-settings:powersleep";
     /// <summary>Not an action on the PC: opens the Drivers page, where the steps and buttons are.</summary>
     public const string ActionShowDrivers = "go:drivers";
     public const uint HibernateAfterSeconds = 20 * 60;
+
+    /// <summary>Only some laptops have it (ASUS's gaming models), so it is named only where it is installed.</summary>
+    static bool HasArmouryCrate(Findings f) =>
+        f.Drivers?.Apps.Any(a => a.Name.StartsWith("Armoury Crate", StringComparison.OrdinalIgnoreCase)) == true;
 
     public static List<Recommendation> Advise(Findings f)
     {
@@ -127,6 +144,52 @@ public static class Advisor
                 body.Append($" The battery holds only {bh:0}% of its original charge, so it has less in reserve when the charger drops.");
             var rec = new Recommendation("charger", after.Count > 0 ? Severity.Critical : Severity.Warning, title, body.ToString());
             if (after.Count > 0) list.Insert(0, rec); else list.Add(rec);
+        }
+
+        // 1d. Hot while doing nothing. A performance power mode is the cheapest fix there is, so it goes first.
+        var overheated = crashes14.Where(c => c.Crash?.Cause == CrashCause.Overheated).OrderByDescending(c => c.Time).ToList();
+        var spells = f.IdleHeat.Where(s => f.Now - s.End <= TimeSpan.FromDays(2)).ToList();
+        if (spells.Count > 0)
+        {
+            var worst = spells.OrderByDescending(s => s.ZoneC).First();
+            string resetsLine = unexplained.Count + overheated.Count > 0
+                ? " Heat like this can trip the laptop's protection and switch it off with no warning, which fits the shutdowns." : "";
+            var severity = unexplained.Count + overheated.Count > 0 ? Severity.Critical : Severity.Warning;
+            if (PowerMode.IsPerformance(f.PowerMode))
+            {
+                string armoury = HasArmouryCrate(f)
+                    ? " In Armoury Crate, leave \"Power mode synchronization\" off, or Turbo mode switches Windows back to Best performance." : "";
+                list.Insert(0, new Recommendation("power-mode", severity,
+                    $"{PowerMode.Name(f.PowerMode)} mode keeps the laptop hot while it does nothing",
+                    $"Windows' power mode is {PowerMode.Name(f.PowerMode)}, which holds the processor near full speed even with nothing to do, so it makes heat all the time. " +
+                    $"Hottest stretch: {worst.Describe()}.{resetsLine} Best power efficiency lets the processor slow down when idle; games may run a little slower.{armoury}",
+                    "Switch to Best power efficiency", ActionPowerEfficiency, "Power settings", PowerSettingsUri));
+            }
+            else if (spells.FirstOrDefault(s => s.Mode != null && !PowerMode.IsPerformance(PowerMode.FromName(s.Mode))) is HeatSpell calm)
+            {
+                // Hot even though the processor was allowed to slow down: the cooling is not keeping up.
+                list.Add(new Recommendation("idle-heat", severity, "The laptop runs hot even when idle",
+                    $"Hottest stretch: {calm.Describe()}, with Windows on {calm.Mode}.{resetsLine} " +
+                    "Clean the vents with compressed air and check that the fans spin up. If it stays hot, have it serviced: the paste between the processor and its cooler wears out.",
+                    "Open the Heat page", ActionShowHeat));
+            }
+        }
+
+        // 1e. Switched off by its own heat protection. First of all: it is the clearest cause there is.
+        if (overheated.Count > 0)
+        {
+            double hottest = overheated.Max(c => c.Crash?.LastReading?.ZoneC ?? 0);
+            string boost = f.BoostAc is uint boostAc and not 0 ? "Turn off processor boost on the Heat page, so it cannot burst to full speed. " : "";
+            string maker = HasArmouryCrate(f) ? "Armoury Crate's Manual mode can also lower the processor's power limits and raise the fan curve. " : "";
+            list.Insert(0, new Recommendation("overheated", Severity.Critical,
+                overheated.Count == 1 ? "Your laptop overheated and switched itself off" : $"Your laptop overheated and switched itself off {overheated.Count} times in two weeks",
+                $"Each time, the thermal sensor read {CrashClassifier.OverheatC:0}°C or more just before (up to {hottest:0}°C), and Windows recorded nothing: the laptop's own heat protection cut the power. " +
+                "If that happens under ordinary work, the cooling is failing, most often the thermal paste between the processor and its cooler, which needs a repair. Until then: " +
+                (f.GovernorOn
+                    ? "the heat governor is on, holding the busiest apps back when the laptop gets too hot. "
+                    : "turn on the heat governor: it holds the busiest apps back when the laptop gets too hot, so it cools before it cuts out. ") +
+                boost + maker,
+                f.GovernorOn ? "Open the Heat page" : "Turn on the heat governor", f.GovernorOn ? ActionShowHeat : ActionGovernorOn));
         }
 
         // 2. BIOS: the usual fix for sleep and stability problems on laptops. Ask the maker when we can.
@@ -257,13 +320,15 @@ public static class Advisor
     {
         IncidentKind[]? kinds = r.Id switch
         {
-            "sudden-resets" or "sleep-deaths" => new[] { IncidentKind.UnexpectedShutdown },
+            "sudden-resets" or "sleep-deaths" or "overheated" => new[] { IncidentKind.UnexpectedShutdown },
             "gpu-resets" => new[] { IncidentKind.GraphicsError },
             "charger" => new[] { IncidentKind.ChargerUnstable, IncidentKind.UnexpectedShutdown },
             _ => null,
         };
         if (kinds != null)
             return f.Incidents.Any(i => kinds.Contains(i.Kind) && i.Severity >= Severity.Warning && i.Time > hidden.At);
+        if (r.Id is "power-mode" or "idle-heat")
+            return f.IdleHeat.Any(s => s.Start > hidden.At);
         if (r.Id is "nvidia-driver" or "amd-driver" or "bios" or "wu-drivers")
             return hidden.Title != null && hidden.Title != r.Title;
         return false;
@@ -287,7 +352,10 @@ public static class Advisor
         {
             int asleep = crashes7.Count(c => c.Crash != null && CrashScanner.IsAsleepCause(c.Crash.Cause));
             int resets = crashes7.Count(c => c.Crash?.Cause == CrashCause.SuddenReset);
+            int heat = crashes7.Count(c => c.Crash?.Cause == CrashCause.Overheated);
             string tail = asleep == crashes7.Count ? (crashes7.Count == 1 ? ", while asleep" : ", all while asleep")
+                : heat == crashes7.Count ? (heat == 1 ? ", from overheating" : ", all from overheating")
+                : heat > 0 ? $", {heat} from overheating"
                 : asleep > 0 ? $", {asleep} while asleep"
                 : resets == crashes7.Count ? (resets == 1 ? ", a sudden reset" : ", all sudden resets")
                 : resets > 0 ? $", {resets} of them sudden resets" : "";

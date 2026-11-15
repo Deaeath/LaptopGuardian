@@ -32,6 +32,8 @@ public sealed class Guardian : IDisposable
     public AppState State { get; }
     public GpuMonitor Gpu { get; } = new();
     public KeyboardDebouncer Keyboard { get; } = new();
+    public HeatGovernor Governor { get; } = new();
+    readonly List<string> _governorApps = new();
 
     public SystemSnapshot System { get; private set; } = new();
     public PowerSettingsInfo? Power { get; private set; }
@@ -47,15 +49,23 @@ public sealed class Guardian : IDisposable
     volatile string _powerState = "awake";
     /// <summary>The firmware's thermal sensor, as last recorded.</summary>
     public double? ThermalZoneC { get; private set; }
+    /// <summary>Windows' power mode in force, read with every flight sample (laptop utilities change it behind our back).</summary>
+    public WindowsPowerMode PowerModeNow { get; private set; }
+    public PowerModeSettings? PowerModes { get; private set; }
+    /// <summary>Stretches of running hot with nothing to do, over the last two days.</summary>
+    public List<HeatSpell> IdleHeatSpells { get; private set; } = new();
+    readonly Queue<FlightSample> _recentSamples = new();
 
     void RecordFlightSample()
     {
         var (pct, ac) = PowerStatus();
         ThermalZoneC = FlightRecorder.ReadThermalZone();
+        var mode = PowerMode.Current();
+        if (mode != PowerModeNow) { PowerModeNow = mode; PowerModes = PowerMode.Settings(); Recompute(); }
         var (cpuBusy, cpuSpeed, cpuTop) = _cpu.Sample();
         var g = Gpu.Latest;
         if (g != null && DateTimeOffset.Now - g.At > TimeSpan.FromMinutes(1)) g = null;
-        Recorder.Write(new FlightSample
+        var sample = new FlightSample
         {
             At = DateTimeOffset.Now,
             State = _powerState,
@@ -73,7 +83,60 @@ public sealed class Guardian : IDisposable
             OnAc = ac,
             BatteryPct = pct,
             TopApps = g == null || g.TopApps.Count == 0 ? null : string.Join(", ", g.TopApps.Take(3).Select(a => $"{a.Name} {a.UtilizationPct:0}%")),
-        });
+            PowerMode = mode == WindowsPowerMode.Unknown ? null : PowerMode.Name(mode),
+        };
+        Recorder.Write(sample);
+        CheckIdleHeat(sample);
+        Sampled?.Invoke();
+    }
+
+    /// <summary>Watches the last few minutes for the laptop running hot with nothing to do, and says so once.</summary>
+    void CheckIdleHeat(FlightSample sample)
+    {
+        List<HeatSpell> live;
+        lock (_recentSamples)
+        {
+            _recentSamples.Enqueue(sample);
+            while (_recentSamples.Count > 0 && sample.At - _recentSamples.Peek().At > TimeSpan.FromMinutes(15)) _recentSamples.Dequeue();
+            live = IdleHeat.Spells(_recentSamples);
+        }
+        // Only a stretch still going on is news; the minute in progress is not counted yet.
+        var spell = live.LastOrDefault(s => sample.At - s.End < TimeSpan.FromMinutes(2));
+        if (spell == null) return;
+        lock (_recentSamples)
+            IdleHeatSpells = IdleHeatSpells.Where(s => s.End < spell.Start || s.Start > spell.End).Append(spell).OrderBy(s => s.Start).ToList();
+
+        var inc = new Incident
+        {
+            Id = "idlehot:" + spell.Start.UtcTicks.ToString(CultureInfo.InvariantCulture), Kind = IncidentKind.IdleHot, Time = spell.Start, Severity = Severity.Warning,
+            Title = $"Hot while doing nothing ({spell.ZoneC:0}°C)",
+            Summary = $"{Fmt.Plural(spell.Minutes, "minute", "minutes")} at {spell.ZoneC:0}°C with the processor only {spell.BusyPct:0}% busy but at {spell.SpeedPct:0}% of its top speed." +
+                      (spell.Mode != null ? $" Windows' power mode: {spell.Mode}." : ""),
+            Detail = PowerMode.IsPerformance(PowerModeNow)
+                ? "A performance power mode holds the processor near full speed even when idle. Best power efficiency lets it slow down (Settings > System > Power)."
+                : "The processor was allowed to slow down, so the cooling is not keeping up: clean the vents and check the fans.",
+            Source = "LaptopGuardian flight recorder",
+        };
+        bool isNew = !Journal.Contains(inc.Id);
+        Journal.Upsert(inc);
+        Journal.Save();
+        if (isNew && Settings.NotifyHeat)
+            Raise("idle-heat", TimeSpan.FromHours(6), new Alert(inc.Kind, inc.Severity, "Your laptop is hot while doing nothing",
+                inc.Summary + (PowerMode.IsPerformance(PowerModeNow) ? " Switching Windows to Best power efficiency usually fixes this." : ""), "heat", inc.Id));
+        Recompute();
+    }
+
+    /// <summary>Sets Windows' power mode for the power source in use, and checks that it took.</summary>
+    public ActionResult SetPowerMode(WindowsPowerMode mode)
+    {
+        uint r = PowerMode.Set(mode);
+        PowerModeNow = PowerMode.Current();
+        PowerModes = PowerMode.Settings();
+        Recompute();
+        if (r == 0 && PowerModeNow == mode)
+            return new ActionResult(true, $"Windows' power mode is now {PowerMode.Name(mode)}." +
+                (mode == WindowsPowerMode.BestPowerEfficiency ? " The processor can slow down when there is little to do." : ""));
+        return new ActionResult(false, $"Windows did not change the power mode{(r != 0 ? $" (error {r})" : "")}. Change it in Settings > System > Power.", Advisor.PowerSettingsUri);
     }
 
     void OnPowerModeChanged(object? sender, Microsoft.Win32.PowerModeChangedEventArgs e)
@@ -100,6 +163,78 @@ public sealed class Guardian : IDisposable
         if (State.MigrateHidden(DateTimeOffset.Now)) SaveState();
         Journal.Changed += () => Changed?.Invoke();
         Gpu.Sampled += OnGpuSample;
+        Governor.Acted += OnGovernorActed;
+    }
+
+    /// <summary>Applies the heat governor settings (and starts or stops it).</summary>
+    public void ApplyGovernorSettings()
+    {
+        Governor.Policy.CapAtC = Math.Clamp(Settings.GovernorCapAtC, 70, 100);
+        Governor.CapPercent = Math.Clamp(Settings.GovernorCapPercent, 10, 90);
+        Governor.SetEnabled(Settings.HeatGovernor);
+        Governor.SetRules(Settings.AppCaps);
+        Recompute();
+    }
+
+    /// <summary>Processor boost in the active plan (plugged in, on battery).</summary>
+    public (uint? Ac, uint? Dc) Boost { get; private set; }
+
+    /// <summary>Turns processor boost off (or back on, as it was) in every power plan.</summary>
+    public async Task<ActionResult> SetBoostAsync(bool on)
+    {
+        var (ac, dc) = PowerConfig.ReadBoost();
+        uint toAc, toDc;
+        if (on)
+        {
+            toAc = State.BoostBeforeAc is uint a and not 0 ? a : PowerConfig.BoostAggressive;
+            toDc = State.BoostBeforeDc is uint d and not 0 ? d : PowerConfig.BoostAggressive;
+        }
+        else
+        {
+            if (ac is uint a and not 0) State.BoostBeforeAc = a;
+            if (dc is uint d and not 0) State.BoostBeforeDc = d;
+            SaveState();
+            toAc = toDc = PowerConfig.BoostOff;
+        }
+        var r = await PowerChange(() => PowerConfig.SetBoost(toAc, toDc), $"boost {toAc} {toDc}",
+            on ? "Processor boost is back on." : "Processor boost is off: the processor stays at its base speed, so it makes far less heat in bursts.");
+        Boost = PowerConfig.ReadBoost();
+        Recompute();
+        return r;
+    }
+
+    /// <summary>The flight recorder's last 15 minutes, oldest first.</summary>
+    public IReadOnlyList<FlightSample> RecentSamples { get { lock (_recentSamples) return _recentSamples.ToList(); } }
+    /// <summary>Raised (on a background thread) after each flight recorder sample.</summary>
+    public event Action? Sampled;
+
+    void OnGovernorActed(GovernorAction a)
+    {
+        var since = a.Since ?? a.At;
+        string id = "governor:" + since.UtcTicks.ToString(CultureInfo.InvariantCulture);
+        string apps;
+        lock (_governorApps)
+        {
+            foreach (var app in a.Apps) if (!_governorApps.Contains(app)) _governorApps.Add(app);
+            apps = string.Join(", ", _governorApps);
+            if (!a.Engaged) _governorApps.Clear();
+        }
+        string temp = a.TempC is double t ? $"{t:0}°C" : "a high load";
+        var inc = new Incident
+        {
+            Id = id, Kind = IncidentKind.HeatGovernor, Time = since, Severity = Severity.Info,
+            Title = $"Heat governor held back {apps}",
+            Summary = a.Engaged
+                ? $"At {temp} it started holding back {apps}, each to half of what it was using, tightening while the laptop stayed hot. Still active."
+                : $"It held back {apps} from {Fmt.Clock(since)} and let go at {Fmt.Clock(a.At)} ({temp}), after {Fmt.Span(a.At - since)}.",
+            Source = "LaptopGuardian heat governor",
+        };
+        Journal.Upsert(inc);
+        Journal.Save();
+        if (a.Engaged && Settings.NotifyHeat)
+            Raise("governor", TimeSpan.FromHours(1), new Alert(inc.Kind, Severity.Warning, "LaptopGuardian is cooling your laptop",
+                $"It reached {temp}, so {apps} {(apps.Contains(',') ? "are" : "is")} held back until it cools down.", "heat", id));
+        Recompute();
     }
 
     public string? DataDir => _dataDir;
@@ -110,6 +245,7 @@ public sealed class Guardian : IDisposable
     public void Start()
     {
         ApplyKeyboardSettings();
+        ApplyGovernorSettings();
         Gpu.Start();
         StartWatcher();
         StartChargerWatcher();
@@ -339,7 +475,15 @@ public sealed class Guardian : IDisposable
 
             System = SystemInfo.Read();
             try { Power = PowerConfig.Read(); } catch { Power = null; }
+            PowerModeNow = PowerMode.Current();
+            PowerModes = PowerMode.Settings();
+            try { Boost = PowerConfig.ReadBoost(); } catch { }
             Mark("system+power");
+
+            // Running hot with nothing to do, over the last two days of the flight recorder.
+            var spells = IdleHeat.Spells(Recorder.Since(DateTimeOffset.Now, TimeSpan.FromDays(2)));
+            lock (_recentSamples) IdleHeatSpells = spells;
+            Mark("idle heat");
             Battery = BatteryReport.Generate() ?? Battery;
             Mark("battery report");
 
@@ -464,6 +608,11 @@ public sealed class Guardian : IDisposable
         Gpu = Gpu.Latest,
         Drivers = Drivers,
         Now = DateTimeOffset.Now,
+        PowerMode = PowerModeNow,
+        PowerModes = PowerModes,
+        IdleHeat = IdleHeatSpells,
+        GovernorOn = Settings.HeatGovernor,
+        BoostAc = Boost.Ac,
     };
 
     /// <summary>Re-derives the advice from what is known now (live heat and memory change it) and tells the window.</summary>
@@ -531,8 +680,12 @@ public sealed class Guardian : IDisposable
     // ---------------------------------------------------------------- sample data
 
     /// <summary>Made-up data for the public screenshots, so they show no real machine, apps or drivers.</summary>
+    /// <summary>Showing made-up data (screenshots): never measure or list the real machine's apps.</summary>
+    public bool IsSample { get; private set; }
+
     public void LoadSampleData()
     {
+        IsSample = true;
         var now = DateTimeOffset.Now;
         System = new SystemSnapshot
         {
@@ -567,6 +720,26 @@ public sealed class Guardian : IDisposable
         old.DismissedAt = now.AddDays(-8);
         Journal.Add(old, save: false);
         Journal.Add(Charger.ToIncident(new ChargerEpisode(now.AddMinutes(-128), now.AddMinutes(-121), 4, 2)), save: false);
+        PowerModeNow = WindowsPowerMode.BestPerformance;
+        PowerModes = new PowerModeSettings(WindowsPowerMode.BestPerformance, WindowsPowerMode.Balanced);
+        IdleHeatSpells = new() { new HeatSpell(now.AddMinutes(-47), now.AddMinutes(-41), 91, 4, 97, "Best performance") };
+        Boost = (PowerConfig.BoostAggressive, PowerConfig.BoostAggressive);
+        Settings.HeatGovernor = true;
+        Settings.AppCaps = new() { new AppCapRule { App = "Browser", CapPercent = 30 }, new AppCapRule { App = "Game", Never = true } };
+        lock (_recentSamples)
+            for (int i = 0; i < 90; i++)
+                _recentSamples.Enqueue(new FlightSample
+                {
+                    At = now.AddSeconds((i - 90) * 10), ZoneC = Math.Round(74 + 9 * Math.Sin(i / 9.0) + (i is > 60 and < 66 ? 12 : 0)),
+                    CpuBusyPct = 18 + 10 * Math.Sin(i / 7.0), CpuSpeedPct = 92, PowerMode = "Best performance",
+                });
+        var held = now.AddMinutes(-12);
+        Journal.Add(new Incident
+        {
+            Id = "sample:governor", Kind = IncidentKind.HeatGovernor, Time = held, Severity = Severity.Info, Title = "Heat governor held back Browser.exe",
+            Summary = $"It capped Browser.exe at 30% of the processor at {Fmt.Clock(held)} and let go at {Fmt.Clock(held.AddMinutes(3))} (79°C), after 3 min.",
+            Source = "LaptopGuardian heat governor",
+        }, save: false);
         var gpu = GraphicsEvents.Decode("nvlddmkm", 153, 2, new[] { @"\Device\Video3", "Error occurred on GPUID: 100" });
         Journal.Add(new Incident
         {
@@ -727,6 +900,15 @@ public sealed class Guardian : IDisposable
             case Advisor.ActionSleepStudy:
                 result = await Elevation.RunAsync(_dataDir, "sleep-study");
                 break;
+            case Advisor.ActionPowerEfficiency:
+                result = await Task.Run(() => SetPowerMode(WindowsPowerMode.BestPowerEfficiency));
+                break;
+            case Advisor.ActionGovernorOn:
+                Settings.HeatGovernor = true;
+                SaveSettings();
+                ApplyGovernorSettings();
+                result = new ActionResult(true, $"The heat governor is on. Past {Settings.GovernorCapAtC}°C it holds the busiest apps to {Settings.GovernorCapPercent}% of the processor until the laptop cools.");
+                break;
             case DriverChecks.ActionInstallWindowsUpdateDrivers:
                 result = await Elevation.RunAsync(_dataDir, DriverChecks.ActionInstallWindowsUpdateDrivers);
                 _ = CheckDriversAsync();
@@ -753,6 +935,8 @@ public sealed class Guardian : IDisposable
 
     public void Dispose()
     {
+        // First: a cap left on when the app closes stays on that app until it exits.
+        try { Governor.Dispose(); } catch { }
         try { if (_watcher != null) { _watcher.Enabled = false; _watcher.Dispose(); } } catch { }
         try { if (_chargerWatcher != null) { _chargerWatcher.Enabled = false; _chargerWatcher.Dispose(); } } catch { }
         _batteryTimer?.Dispose();
@@ -812,6 +996,7 @@ public static class Elevation
                 "enable-hibernate" => RunTool("powercfg.exe", "/hibernate on", "Hibernation is on."),
                 "lid-hibernate" => Check(PowerConfig.SetLidAndButtonToHibernate(bestEffort: true), "Closing the lid or pressing the power button now hibernates."),
                 "hibernate-after" => Check(PowerConfig.SetHibernateAfter(uint.Parse(args[1], CultureInfo.InvariantCulture), bestEffort: true), "Sleep now turns into hibernation after a while."),
+                "boost" => Check(PowerConfig.SetBoost(uint.Parse(args[1], CultureInfo.InvariantCulture), uint.Parse(args[2], CultureInfo.InvariantCulture), bestEffort: true), "Processor boost changed."),
                 "sleep-study" => SleepStudy(dataDir),
                 DriverChecks.ActionInstallWindowsUpdateDrivers => DriverChecks.InstallWindowsUpdateDrivers(),
                 _ => new ActionResult(false, $"Unknown task '{task}'."),

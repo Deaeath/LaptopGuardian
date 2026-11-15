@@ -31,6 +31,11 @@ public static class ReportBuilder
             sb.AppendLine($"- Plugged in: sleep after {Fmt.Seconds(p.SleepAfterAc)}, hibernate after {Fmt.Seconds(p.HibernateAfterAc)}, lid: {PowerConfig.ActionName(p.LidAc)}");
             sb.AppendLine($"- On battery: sleep after {Fmt.Seconds(p.SleepAfterDc)}, hibernate after {Fmt.Seconds(p.HibernateAfterDc)}, lid: {PowerConfig.ActionName(p.LidDc)}");
         }
+        if (f.PowerModes is PowerModeSettings pm)
+            sb.AppendLine($"- Windows power mode: plugged in {PowerMode.Name(pm.PluggedIn)}, on battery {PowerMode.Name(pm.OnBattery)} (in force now: {PowerMode.Name(f.PowerMode)})");
+        var heat = f.IdleHeat.Where(s => f.Now - s.End <= TimeSpan.FromDays(2)).ToList();
+        if (heat.Count > 0)
+            sb.AppendLine($"- Hot while idle (last 2 days): {heat.Count} stretches; hottest {heat.OrderByDescending(s => s.ZoneC).First().Describe()}{(heat.Any(s => s.Mode != null) ? $", power mode {heat.Last(s => s.Mode != null).Mode}" : "")}");
         if (f.Gpu is GpuSnapshot g) sb.AppendLine($"- Graphics card now: {g.Describe()}");
         sb.AppendLine();
 

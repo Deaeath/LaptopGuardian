@@ -15,8 +15,30 @@ public sealed class AppSettings
     public bool NotifyBattery { get; set; } = true;
     public bool NotifyHardware { get; set; } = true;
     public bool NotifyCharger { get; set; } = true;
+    /// <summary>Hold the busiest apps to a share of the processor when the laptop gets too hot.</summary>
+    public bool HeatGovernor { get; set; }
+    public int GovernorCapAtC { get; set; } = 88;
+    public int GovernorCapPercent { get; set; } = 40;
+    /// <summary>Per-app processor caps the person set (like 3dxGC's RAM caps): an app's own cap, always or only when hot, or never.</summary>
+    public List<AppCapRule> AppCaps { get; set; } = new();
     public bool NotifyDriverUpdates { get; set; } = true;
     public bool AutoUpdate { get; set; } = true;
+}
+
+/// <summary>One app's processor cap.</summary>
+public sealed class AppCapRule
+{
+    /// <summary>Process name without ".exe", e.g. "chrome".</summary>
+    public string App { get; set; } = "";
+    /// <summary>Share of the whole processor it may use when capped. Null: the governor's own cap.</summary>
+    public int? CapPercent { get; set; }
+    /// <summary>Capped all the time, not only when the laptop is hot.</summary>
+    public bool Always { get; set; }
+    /// <summary>Never capped, however hot it gets.</summary>
+    public bool Never { get; set; }
+
+    public static string Normalize(string name) =>
+        (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name).Trim();
 }
 
 public sealed class AppState
@@ -32,6 +54,9 @@ public sealed class AppState
     public List<string> AnnouncedDriverUpdates { get; set; } = new();
     /// <summary>When the stuck crash reports were last cleared; older log entries of them no longer count.</summary>
     public DateTimeOffset? ReportsClearedAt { get; set; }
+    /// <summary>Processor boost before LaptopGuardian turned it off, to put back when it is turned on again.</summary>
+    public uint? BoostBeforeAc { get; set; }
+    public uint? BoostBeforeDc { get; set; }
 
     /// <summary>Moves the old hidden-for-good list over, as hidden now. Returns true if anything moved.</summary>
     public bool MigrateHidden(DateTimeOffset now)

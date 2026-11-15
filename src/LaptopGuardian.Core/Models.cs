@@ -6,7 +6,7 @@ namespace LaptopGuardian.Core;
 public enum Severity { Info, Warning, Critical }
 
 [JsonConverter(typeof(JsonStringEnumConverter<IncidentKind>))]
-public enum IncidentKind { GraphicsError, UnexpectedShutdown, HardwareError, GpuHot, GpuMemoryFull, BatteryLow, ChargerUnstable }
+public enum IncidentKind { GraphicsError, UnexpectedShutdown, HardwareError, GpuHot, GpuMemoryFull, BatteryLow, ChargerUnstable, IdleHot, HeatGovernor }
 
 [JsonConverter(typeof(JsonStringEnumConverter<CrashCause>))]
 public enum CrashCause
@@ -27,6 +27,8 @@ public enum CrashCause
     Unknown,
     /// <summary>Running one moment and restarting seconds later, with no error and no button press.</summary>
     SuddenReset,
+    /// <summary>The thermal sensor was at or past the point where the laptop protects itself, right before it stopped.</summary>
+    Overheated,
 }
 
 /// <summary>One thing that happened to the laptop, kept in the journal.</summary>

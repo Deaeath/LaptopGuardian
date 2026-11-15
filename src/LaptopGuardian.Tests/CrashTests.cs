@@ -134,10 +134,11 @@ public class CrashClassifierTests
     [Fact]
     public void Running_then_restarting_within_seconds_is_a_sudden_reset()
     {
-        var v = CrashClassifier.Classify(Facts(activity: Back.AddSeconds(-24), reading: new FlightSample { At = Back.AddSeconds(-24), ZoneC = 96, GpuC = 87, GpuBusyPct = 100 }));
+        // Below the overheating line (95°C and up is "Overheated", tested in HeatTests).
+        var v = CrashClassifier.Classify(Facts(activity: Back.AddSeconds(-24), reading: new FlightSample { At = Back.AddSeconds(-24), ZoneC = 82, GpuC = 87, GpuBusyPct = 100 }));
         Assert.Equal(CrashCause.SuddenReset, v.Cause);
         Assert.Contains("24 s later", v.Summary);
-        Assert.Contains("96°C", v.Summary);
+        Assert.Contains("82°C", v.Summary);
         Assert.Contains("no press of the power button", v.Summary);
     }
 

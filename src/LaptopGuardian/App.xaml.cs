@@ -14,8 +14,8 @@ public partial class App : Application
     MainViewModel? _vm;
     MainWindow? _window;
     TrayIcon? _tray;
-    EventWaitHandle? _showSignal;
-    RegisteredWaitHandle? _showWait;
+    EventWaitHandle? _showSignal, _quitSignal;
+    RegisteredWaitHandle? _showWait, _quitWait;
 
     public string? ScreenshotDir { get; set; }
     public bool? ForceDark { get; set; }
@@ -121,6 +121,8 @@ public partial class App : Application
         // A second launch (Start menu, desktop shortcut) brings this window forward.
         _showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ShowEventName);
         _showWait = ThreadPool.RegisterWaitForSingleObject(_showSignal, (_, _) => Dispatcher.BeginInvoke(() => ShowWindow()), null, -1, false);
+        _quitSignal = new EventWaitHandle(false, EventResetMode.AutoReset, Program.QuitEventName);
+        _quitWait = ThreadPool.RegisterWaitForSingleObject(_quitSignal, (_, _) => Dispatcher.BeginInvoke(Quit), null, -1, true);
 
         // After an update or a move, keep "start with Windows" pointing at this copy (never a development build).
         var exe = Environment.ProcessPath;
@@ -149,6 +151,7 @@ public partial class App : Application
             return mi;
         }
         menu.Items.Add(Item("Open LaptopGuardian", () => ShowWindow()));
+        menu.Items.Add(Item("Heat", () => ShowWindow("heat")));
         menu.Items.Add(Item("Shutdowns", () => ShowWindow("shutdowns")));
         menu.Items.Add(Item("Graphics", () => ShowWindow("graphics")));
         menu.Items.Add(Item("Check again", () => Task.Run(() => _engine?.Scan())));
@@ -199,6 +202,8 @@ public partial class App : Application
         _updateTimer?.Dispose();
         _showWait?.Unregister(null);
         _showSignal?.Dispose();
+        _quitWait?.Unregister(null);
+        _quitSignal?.Dispose();
         _tray?.Dispose();
         _engine?.Dispose();
         Shutdown();

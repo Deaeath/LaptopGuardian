@@ -237,6 +237,45 @@ public sealed class RecommendationVm : Observable
     public bool NotBusy => !_busy;
 }
 
+/// <summary>One row of the app caps table on the Heat page.</summary>
+public sealed class AppCapRowVm : Observable
+{
+    public const string DefaultCap = "Default";
+    public static IReadOnlyList<string> CapOptions { get; } = new[] { DefaultCap, "1%", "3%", "5%", "10%", "20%", "25%", "30%", "40%", "50%", "60%", "75%" };
+
+    string _cap = DefaultCap, _status = "";
+    bool _always, _never;
+
+    public AppCapRowVm(string app, double? share, AppCapRule? rule)
+    {
+        App = app;
+        UsingText = share is double s ? $"{s:0.#}%" : "not running";
+        if (rule != null)
+        {
+            _cap = rule.CapPercent is int p ? CapOptions.FirstOrDefault(o => o == $"{p}%") ?? $"{p}%" : DefaultCap;
+            _always = rule.Always;
+            _never = rule.Never;
+        }
+    }
+
+    public string App { get; }
+    public string Display => App + ".exe";
+    public string UsingText { get; }
+    public IReadOnlyList<string> Options => CapOptions.Contains(_cap) ? CapOptions : CapOptions.Append(_cap).ToList();
+    public string CapChoice { get => _cap; set { if (value != null) Set(ref _cap, value); } }
+    public bool Always { get => _always; set { if (Set(ref _always, value) && value) Never = false; } }
+    public bool Never { get => _never; set { if (Set(ref _never, value) && value) Always = false; } }
+    public string Status { get => _status; set => Set(ref _status, value); }
+
+    /// <summary>Null when the row says nothing beyond the defaults.</summary>
+    public AppCapRule? ToRule()
+    {
+        int? pct = _cap != DefaultCap && int.TryParse(_cap.TrimEnd('%'), out var p) ? p : null;
+        if (pct == null && !_always && !_never) return null;
+        return new AppCapRule { App = App, CapPercent = pct, Always = _always, Never = _never };
+    }
+}
+
 public sealed record KernelReportVm(string Title, string Line, string Meaning, Brush Brush, bool Stuck);
 public sealed record GuideActionVm(string Label, bool Primary, ICommand Command);
 public sealed record GuideVm(string Title, string Status, Brush Brush, string Glyph, List<string> Steps, List<GuideActionVm> Actions);
@@ -272,6 +311,8 @@ public sealed class MainViewModel : Observable
             new("keyboard", "Keyboard", ""),
             new("settings", "Settings", ""),
         };
+        // Second only to the overview: heat is what switches these laptops off.
+        Nav.Insert(1, new NavItem("heat", "Heat", ""));
         _selectedNav = Nav[0];
 
         CopyReportCommand = new Command(CopyReport);
@@ -286,6 +327,10 @@ public sealed class MainViewModel : Observable
         CheckDriversCommand = new Command(() => _ = _g.CheckDriversAsync());
         CheckUpdatesCommand = new Command(() => CheckForUpdatesRequested?.Invoke());
         RestoreSuggestionsCommand = new Command(() => { _g.RestoreDismissed(); ShowMessage("Hidden suggestions are back on the Overview page."); });
+        SaveCapsCommand = new Command(SaveCaps);
+        RefreshCapsCommand = new Command(() => _ = RefreshCapsAsync());
+        PageChanged += () => { if (Page == "heat") { RefreshHeat(); _ = RefreshCapsAsync(); } };
+        g.Sampled += QueueHeat;
         DismissAllCommand = new Command(() =>
         {
             int n = _g.DismissAllAlerts();
@@ -321,6 +366,8 @@ public sealed class MainViewModel : Observable
         var item = Nav.FirstOrDefault(n => n.Key == key);
         if (item != null) SelectedNav = item;
     }
+
+    NavItem NavFor(string key) => Nav.First(n => n.Key == key);
 
     public ImageSource AppIcon { get; }
     public Severity StatusLevel { get; private set; }
@@ -401,6 +448,193 @@ public sealed class MainViewModel : Observable
     public string SleepModeText { get; private set; } = "";
     public string PowerPlanText { get; private set; } = "";
 
+    public IReadOnlyList<string> PowerModeOptions { get; } = new[]
+    {
+        PowerMode.Name(WindowsPowerMode.BestPowerEfficiency), PowerMode.Name(WindowsPowerMode.Balanced), PowerMode.Name(WindowsPowerMode.BestPerformance),
+    };
+    string? _powerModeChoice;
+    /// <summary>The power mode picker. Choosing one sets it in Windows; the list follows Windows when something else changes it.</summary>
+    public string? PowerModeChoice
+    {
+        get => _powerModeChoice;
+        set
+        {
+            if (value == null || value == _powerModeChoice) return;
+            _powerModeChoice = value;
+            var r = _g.SetPowerMode(PowerMode.FromName(value));
+            ShowMessage(r.Message, !r.Ok);
+            if (!r.Ok && r.OpenPath != null) Open(r.OpenPath);
+            Refresh();
+        }
+    }
+    public string PowerModeText { get; private set; } = "";
+    public Brush PowerModeBrush { get; private set; } = Brushes.Gray;
+
+    // ------------------------------------------------------------ heat
+
+    public string HeatNowText { get; private set; } = "--";
+    public Brush HeatBrush { get; private set; } = Brushes.Gray;
+    public Brush HeatTint { get; private set; } = Brushes.Transparent;
+    public Brush HeatBannerBrush { get; private set; } = Brushes.Gray;
+    public string HeatHeadline { get; private set; } = "";
+    public string HeatSummary { get; private set; } = "";
+    public IReadOnlyList<double> HeatSeries { get; private set; } = Array.Empty<double>();
+    public string HeatRangeText { get; private set; } = "";
+    public string HeatLoadText { get; private set; } = "";
+    public string GovernorStateText { get; private set; } = "";
+    public Brush GovernorStateBrush { get; private set; } = Brushes.Gray;
+    public string Overheat7Text { get; private set; } = "0";
+    public Brush Overheat7Brush { get; private set; } = Brushes.Gray;
+    public string OverheatDetailText { get; private set; } = "";
+    public List<IncidentVm> HeatEvents { get; private set; } = new();
+    public string BoostText { get; private set; } = "";
+    public bool BoostOn
+    {
+        get => _g.Boost.Ac is uint a && a != 0;
+        set { if (value != BoostOn) _ = SetBoostAsync(value); }
+    }
+    async Task SetBoostAsync(bool on)
+    {
+        var r = await _g.SetBoostAsync(on);
+        ShowMessage(r.Message, !r.Ok);
+        RefreshHeat();
+    }
+    public IReadOnlyList<int> GovernorCapOptions { get; } = new[] { 25, 40, 60 };
+    public int GovernorCapPercent
+    {
+        get => _g.Settings.GovernorCapPercent;
+        set { _g.Settings.GovernorCapPercent = value; _g.SaveSettings(); _g.ApplyGovernorSettings(); Raise(); }
+    }
+    public List<AppCapRowVm> AppCapRows { get; private set; } = new();
+    public string CapsNote { get; private set; } = "Open this page to measure which apps use the processor.";
+    public ICommand SaveCapsCommand { get; private set; } = null!;
+    public ICommand RefreshCapsCommand { get; private set; } = null!;
+    bool _heatQueued, _measuring;
+
+    void QueueHeat()
+    {
+        if (_heatQueued) return;
+        _heatQueued = true;
+        _ui.BeginInvoke(DispatcherPriority.Background, () => { _heatQueued = false; RefreshHeat(); });
+    }
+
+    void RefreshHeat()
+    {
+        var f = _g.Findings();
+        var samples = _g.RecentSamples.Where(s => s.ZoneC != null).ToList();
+        var last = samples.LastOrDefault();
+        double? now = last?.ZoneC ?? _g.ThermalZoneC;
+        string Level(double? t) => t is not double v ? "Muted" : v >= 90 ? "Bad" : v >= 80 ? "Warn" : "Good";
+        HeatNowText = now is double n ? $"{n:0}°" : "--";
+        HeatBrush = Theme.Brush(Level(now));
+        HeatSeries = samples.Select(s => s.ZoneC!.Value).ToArray();
+        HeatRangeText = samples.Count > 0
+            ? $"Last 15 minutes: {samples.Min(s => s.ZoneC!.Value):0} to {samples.Max(s => s.ZoneC!.Value):0}°C."
+            : "Readings start within a few seconds.";
+        HeatLoadText = last == null ? "" :
+            $"Processor {last.CpuBusyPct:0}% busy at {last.CpuSpeedPct:0}% of its speed" + (last.GpuC is double g ? $"  ·  graphics card {g:0}°C" : "");
+
+        var held = _g.Governor.Holding;
+        bool cooling = held.Any(h => !h.Always);
+        GovernorStateText = cooling ? "Cooling" : _g.Settings.HeatGovernor ? "Watching" : "Off";
+        GovernorStateBrush = Theme.Brush(cooling ? "Warn" : _g.Settings.HeatGovernor ? "Good" : "Muted");
+
+        var hot = f.Incidents.Where(i => i.Kind == IncidentKind.UnexpectedShutdown && i.Crash?.Cause == CrashCause.Overheated).OrderByDescending(i => i.Time).ToList();
+        int hot7 = hot.Count(i => f.Now - i.Time <= TimeSpan.FromDays(7)), hot30 = hot.Count(i => f.Now - i.Time <= TimeSpan.FromDays(30));
+        Overheat7Text = hot7.ToString();
+        Overheat7Brush = Theme.Brush(hot7 > 0 ? "Bad" : "Good");
+        OverheatDetailText = $"Last 30 days: {Fmt.Plural(hot30, "overheating shutdown", "overheating shutdowns")}." +
+            (hot.FirstOrDefault() is Incident lh ? $" Last: {Fmt.When(lh.Time)}{(lh.Crash?.LastReading?.ZoneC is double z ? $", at {z:0}°C" : "")}." : "");
+
+        string governorLine = cooling ? $"The heat governor is holding back {string.Join(", ", held.Where(h => !h.Always).Select(h => h.App))}."
+            : _g.Settings.HeatGovernor ? "The heat governor is watching." : "The heat governor is off.";
+        string level;
+        if (hot7 > 0)
+        {
+            level = "Bad";
+            HeatHeadline = "Overheating";
+            HeatSummary = $"It switched itself off from heat {(hot7 == 1 ? "once" : $"{hot7} times")} this week. {governorLine}";
+        }
+        else if (now >= 90 || samples.Any(s => s.ZoneC >= 95))
+        {
+            level = "Warn";
+            HeatHeadline = "Running hot";
+            HeatSummary = $"{HeatRangeText} {governorLine}";
+        }
+        else
+        {
+            level = "Good";
+            HeatHeadline = now == null ? "No temperature reading" : "Normal";
+            HeatSummary = now == null ? "This laptop does not report a temperature to Windows, so the governor goes by load alone." : $"{HeatRangeText} {governorLine}";
+        }
+        HeatBannerBrush = Theme.Brush(level);
+        HeatTint = Theme.Brush(level + "Tint");
+
+        BoostText = $"Now: {PowerConfig.BoostName(_g.Boost.Ac)} plugged in, {PowerConfig.BoostName(_g.Boost.Dc)} on battery.";
+        UpdateCapStatuses();
+        foreach (var name in new[]
+        {
+            nameof(HeatNowText), nameof(HeatBrush), nameof(HeatTint), nameof(HeatBannerBrush), nameof(HeatHeadline), nameof(HeatSummary), nameof(HeatSeries),
+            nameof(HeatRangeText), nameof(HeatLoadText), nameof(GovernorStateText), nameof(GovernorStateBrush), nameof(GovernorStatus),
+            nameof(Overheat7Text), nameof(Overheat7Brush), nameof(OverheatDetailText), nameof(BoostText), nameof(BoostOn),
+        }) Raise(name);
+    }
+
+    /// <summary>Measures which apps use the processor now (half a second) and lists them with their caps.</summary>
+    async Task RefreshCapsAsync()
+    {
+        if (_measuring) return;
+        _measuring = true;
+        CapsNote = "Measuring...";
+        Raise(nameof(CapsNote));
+        try
+        {
+            var use = _g.IsSample
+                ? new List<ProcessUse> { new(1, "Game", 41), new(2, "Browser", 23), new(3, "Chat", 3), new(4, "Music", 1) }
+                : await Task.Run(HeatGovernor.Sample);
+            var byApp = use.Where(u => !HeatGovernor.Protected.Contains(u.Name))
+                .GroupBy(u => u.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Sum(x => x.Share), StringComparer.OrdinalIgnoreCase);
+            var rules = _g.Settings.AppCaps;
+            var names = rules.Select(r => r.App)
+                .Concat(byApp.Where(kv => kv.Value >= 0.5).OrderByDescending(kv => kv.Value).Take(20).Select(kv => kv.Key))
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            AppCapRows = names
+                .Select(n => new AppCapRowVm(n, byApp.TryGetValue(n, out var s) ? s : null, rules.FirstOrDefault(r => r.App.Equals(n, StringComparison.OrdinalIgnoreCase))))
+                .OrderByDescending(r => byApp.GetValueOrDefault(r.App))
+                .ToList();
+            UpdateCapStatuses();
+            CapsNote = $"Measured at {Fmt.Clock(DateTimeOffset.Now)}. Apps using under 0.5% are left out unless they have a cap.";
+        }
+        catch (Exception ex) { CapsNote = "Could not measure the apps: " + ex.Message; }
+        finally { _measuring = false; }
+        Raise(nameof(AppCapRows));
+        Raise(nameof(CapsNote));
+    }
+
+    void UpdateCapStatuses()
+    {
+        var held = _g.Governor.Holding;
+        foreach (var row in AppCapRows)
+        {
+            var h = held.FirstOrDefault(x => x.App.Equals(row.Display, StringComparison.OrdinalIgnoreCase));
+            row.Status = row.Never ? "Never capped"
+                : h != null ? $"Held at {h.Percent}%{(h.Always ? ", always" : " while hot")}"
+                : row.UsingText == "not running" ? "Not running"
+                : "";
+        }
+    }
+
+    void SaveCaps()
+    {
+        var rules = AppCapRows.Select(r => r.ToRule()).OfType<AppCapRule>().ToList();
+        _g.Settings.AppCaps = rules;
+        _g.SaveSettings();
+        _g.ApplyGovernorSettings();
+        ShowMessage(rules.Count == 0 ? "Saved. No app has a cap of its own." : $"Saved {Fmt.Plural(rules.Count, "app cap", "app caps")}.");
+        _ = Task.Delay(2000).ContinueWith(_ => _ui.BeginInvoke(RefreshHeat), TaskScheduler.Default);
+    }
+
     // ------------------------------------------------------------ keyboard and settings
 
     public IReadOnlyList<ThresholdOption> Thresholds { get; } = new[]
@@ -452,6 +686,30 @@ public sealed class MainViewModel : Observable
     public bool NotifyBattery { get => _g.Settings.NotifyBattery; set { _g.Settings.NotifyBattery = value; _g.SaveSettings(); Raise(); } }
     public bool NotifyHardware { get => _g.Settings.NotifyHardware; set { _g.Settings.NotifyHardware = value; _g.SaveSettings(); Raise(); } }
     public bool NotifyCharger { get => _g.Settings.NotifyCharger; set { _g.Settings.NotifyCharger = value; _g.SaveSettings(); Raise(); } }
+
+    public bool HeatGovernorOn
+    {
+        get => _g.Settings.HeatGovernor;
+        set { _g.Settings.HeatGovernor = value; _g.SaveSettings(); _g.ApplyGovernorSettings(); Raise(); Raise(nameof(GovernorStatus)); }
+    }
+    public IReadOnlyList<int> GovernorThresholds { get; } = new[] { 85, 88, 90, 92 };
+    public int GovernorCapAtC
+    {
+        get => _g.Settings.GovernorCapAtC;
+        set { _g.Settings.GovernorCapAtC = value; _g.SaveSettings(); _g.ApplyGovernorSettings(); Raise(); }
+    }
+    public string GovernorStatus
+    {
+        get
+        {
+            if (!_g.Settings.HeatGovernor) return "Off.";
+            string temp = _g.Governor.LastTempC is double t ? $" Thermal sensor {t:0}°C." : "";
+            var apps = _g.Governor.CappedApps;
+            return apps.Count > 0
+                ? $"Holding back {string.Join(", ", apps)} since {Fmt.Clock(_g.Governor.EngagedAt ?? DateTimeOffset.Now)}.{temp}"
+                : $"Watching. Nothing held back.{temp}";
+        }
+    }
 
     // ------------------------------------------------------------ message bar
 
@@ -656,7 +914,9 @@ public sealed class MainViewModel : Observable
             ? $"Last: {Fmt.When(last.Time)}, {char.ToLowerInvariant(last.Title[0])}{last.Title[1..]}."
             : "No unexpected shutdowns in the last 60 days.";
         int open7 = f.Crashes(TimeSpan.FromDays(7)).Count(c => !c.Dismissed);
-        Nav[2].Badge = open7 > 0 ? open7.ToString() : null;
+        NavFor("shutdowns").Badge = open7 > 0 ? open7.ToString() : null;
+        int hot7 = f.Crashes(TimeSpan.FromDays(7)).Count(c => !c.Dismissed && c.Crash?.Cause == CrashCause.Overheated);
+        NavFor("heat").Badge = hot7 > 0 ? hot7.ToString() : null;
 
         // Battery
         var (pct, ac) = Guardian.PowerStatus();
@@ -696,7 +956,17 @@ public sealed class MainViewModel : Observable
             PowerPlanText = string.IsNullOrEmpty(pw.SchemeName) ? "" : $"Power plan: {pw.SchemeName}";
         }
 
+        // Windows' power mode
+        var mode = _g.PowerModeNow;
+        _powerModeChoice = PowerModeOptions.Contains(PowerMode.Name(mode)) ? PowerMode.Name(mode) : null;
+        var spells = f.IdleHeat.Where(s => f.Now - s.End <= TimeSpan.FromDays(2)).ToList();
+        PowerModeText = (f.PowerModes is PowerModeSettings pm ? $"Plugged in: {PowerMode.Name(pm.PluggedIn)}  ·  On battery: {PowerMode.Name(pm.OnBattery)}. " : "") +
+            (spells.Count == 0 ? "No stretches of running hot while idle in the last two days."
+                : $"{Fmt.Plural(spells.Count, "stretch", "stretches")} of running hot while idle in the last two days. Hottest: {spells.OrderByDescending(s => s.ZoneC).First().Describe()}.");
+        PowerModeBrush = Theme.Brush(PowerMode.IsPerformance(mode) && spells.Count > 0 ? "Warn" : "Muted");
+
         RefreshDrivers(f);
+        RefreshHeat();
 
         // Lists, rebuilt only when something in them changed (rebuilding resets open drop-downs).
         var items = f.Incidents;
@@ -714,7 +984,7 @@ public sealed class MainViewModel : Observable
                 "Shutdowns" => i.Kind == IncidentKind.UnexpectedShutdown,
                 "Graphics errors" => i.Kind is IncidentKind.GraphicsError or IncidentKind.HardwareError,
                 "Charger" => i.Kind == IncidentKind.ChargerUnstable,
-                "Alerts" => i.Kind is IncidentKind.GpuHot or IncidentKind.GpuMemoryFull or IncidentKind.BatteryLow or IncidentKind.ChargerUnstable,
+                "Alerts" => i.Kind is IncidentKind.GpuHot or IncidentKind.GpuMemoryFull or IncidentKind.BatteryLow or IncidentKind.ChargerUnstable or IncidentKind.IdleHot or IncidentKind.HeatGovernor,
                 "Dismissed" => i.Dismissed,
                 _ => true,
             }).Take(400), this);
@@ -725,6 +995,9 @@ public sealed class MainViewModel : Observable
                 : $"{Fmt.Plural(crashes.Count, "unexpected shutdown", "unexpected shutdowns")} in the last 60 days{(asleep > 0 ? $", {asleep} of them while asleep" : "")}." +
                   (crashes.Count >= 2 && crashes.Take(2).All(c => c.Crash != null && CrashScanner.IsAsleepCause(c.Crash.Cause)) ? " The two most recent both happened during sleep." : "");
             GraphicsErrors = items.Where(i => i.Kind is IncidentKind.GraphicsError or IncidentKind.HardwareError).Take(60).Select(i => new IncidentVm(i, false, this)).ToList();
+            HeatEvents = items.Where(i => i.Kind is IncidentKind.HeatGovernor or IncidentKind.IdleHot
+                    || (i.Kind == IncidentKind.UnexpectedShutdown && i.Crash?.Cause == CrashCause.Overheated))
+                .Take(60).Select(i => new IncidentVm(i, false, this)).ToList();
 
             var stuck = f.KernelReports.Where(k => k.Stuck).ToList();
             HasStuckReports = stuck.Count > 0;

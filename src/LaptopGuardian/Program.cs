@@ -6,6 +6,8 @@ namespace LaptopGuardian;
 public static class Program
 {
     public const string ShowEventName = @"Local\LaptopGuardian.Show";
+    /// <summary>Asks the running copy to quit cleanly, which takes its processor caps off (a killed copy leaves them on).</summary>
+    public const string QuitEventName = @"Local\LaptopGuardian.Quit";
     // Same name as version 1, so the two can never run (and hook the keyboard) at the same time.
     const string MutexName = @"Local\LaptopGuardian.SingleInstance";
 
@@ -13,6 +15,11 @@ public static class Program
     public static int Main(string[] args)
     {
         if (args.Contains("--diagnose")) return Cli.Diagnose(args);
+        if (args.Contains("--quit"))
+        {
+            try { using var quit = EventWaitHandle.OpenExisting(QuitEventName); quit.Set(); return 0; }
+            catch { return 1; } // not running
+        }
         if (args.Contains("--write-icon")) return Cli.WriteIcon(args);
         if (args.Contains("--screenshot"))
         {
