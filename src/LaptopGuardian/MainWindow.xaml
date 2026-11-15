@@ -427,23 +427,7 @@
                             </StackPanel>
                         </Border>
 
-                        <DockPanel Margin="0,0,0,0">
-                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Bottom" Margin="0,0,0,12">
-                                <Button Style="{StaticResource SubtleButton}" Command="{Binding RefreshCapsCommand}" Margin="0,0,10,0">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE72C;" FontSize="13" VerticalAlignment="Center" />
-                                        <TextBlock Text="Refresh" Margin="8,0,0,0" />
-                                    </StackPanel>
-                                </Button>
-                                <Button Style="{StaticResource AccentButton}" Command="{Binding SaveCapsCommand}">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Style="{StaticResource Glyph}" Text="&#xE74E;" FontSize="13" VerticalAlignment="Center" />
-                                        <TextBlock Text="Save caps" Margin="8,0,0,0" />
-                                    </StackPanel>
-                                </Button>
-                            </StackPanel>
-                            <TextBlock Style="{StaticResource Section}" Text="App caps" />
-                        </DockPanel>
+                        <TextBlock Style="{StaticResource Section}" Text="App caps" />
                         <Border Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource Small}" Margin="0,0,0,12"

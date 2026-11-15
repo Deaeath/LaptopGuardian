@@ -183,6 +183,7 @@ public partial class App : Application
             {
                 // Sample the graphics card every 2 seconds while you are looking, every 15 seconds otherwise.
                 _engine.Gpu.Interval = _window.IsVisible ? TimeSpan.FromSeconds(2) : TimeSpan.FromSeconds(15);
+                _vm.WindowVisible = _window.IsVisible; // the caps table measures only while it can be seen
                 if (_window.IsVisible) _engine.Gpu.Poke();
                 else Dispatcher.BeginInvoke(TryApplyUpdate);
             };

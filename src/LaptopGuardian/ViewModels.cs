@@ -243,13 +243,16 @@ public sealed class AppCapRowVm : Observable
     public const string DefaultCap = "Default";
     public static IReadOnlyList<string> CapOptions { get; } = new[] { DefaultCap, "1%", "3%", "5%", "10%", "20%", "25%", "30%", "40%", "50%", "60%", "75%" };
 
-    string _cap = DefaultCap, _status = "";
-    bool _always, _never;
+    string _cap = DefaultCap, _status = "", _using = "";
+    bool _always, _never, _quiet;
+    readonly Action _changed;
 
-    public AppCapRowVm(string app, double? share, AppCapRule? rule)
+    /// <param name="changed">Called when the person changes the row: the change applies at once.</param>
+    public AppCapRowVm(string app, double? share, AppCapRule? rule, Action changed)
     {
         App = app;
-        UsingText = share is double s ? $"{s:0.#}%" : "not running";
+        _changed = changed;
+        SetUsing(share);
         if (rule != null)
         {
             _cap = rule.CapPercent is int p ? CapOptions.FirstOrDefault(o => o == $"{p}%") ?? $"{p}%" : DefaultCap;
@@ -260,12 +263,28 @@ public sealed class AppCapRowVm : Observable
 
     public string App { get; }
     public string Display => App + ".exe";
-    public string UsingText { get; }
+    public string UsingText { get => _using; private set => Set(ref _using, value); }
+    public bool Running { get; private set; }
+    public void SetUsing(double? share)
+    {
+        Running = share != null;
+        UsingText = share is double s ? $"{s:0.#}%" : "not running";
+    }
     public IReadOnlyList<string> Options => CapOptions.Contains(_cap) ? CapOptions : CapOptions.Append(_cap).ToList();
-    public string CapChoice { get => _cap; set { if (value != null) Set(ref _cap, value); } }
-    public bool Always { get => _always; set { if (Set(ref _always, value) && value) Never = false; } }
-    public bool Never { get => _never; set { if (Set(ref _never, value) && value) Always = false; } }
+    public string CapChoice { get => _cap; set { if (value != null && Set(ref _cap, value)) Apply(); } }
+    public bool Always
+    {
+        get => _always;
+        set { if (!Set(ref _always, value)) return; if (value) { _quiet = true; Never = false; _quiet = false; } Apply(); }
+    }
+    public bool Never
+    {
+        get => _never;
+        set { if (!Set(ref _never, value)) return; if (value) { _quiet = true; Always = false; _quiet = false; } Apply(); }
+    }
     public string Status { get => _status; set => Set(ref _status, value); }
+
+    void Apply() { if (!_quiet) _changed(); }
 
     /// <summary>Null when the row says nothing beyond the defaults.</summary>
     public AppCapRule? ToRule()
@@ -327,9 +346,7 @@ public sealed class MainViewModel : Observable
         CheckDriversCommand = new Command(() => _ = _g.CheckDriversAsync());
         CheckUpdatesCommand = new Command(() => CheckForUpdatesRequested?.Invoke());
         RestoreSuggestionsCommand = new Command(() => { _g.RestoreDismissed(); ShowMessage("Hidden suggestions are back on the Overview page."); });
-        SaveCapsCommand = new Command(SaveCaps);
-        RefreshCapsCommand = new Command(() => _ = RefreshCapsAsync());
-        PageChanged += () => { if (Page == "heat") { RefreshHeat(); _ = RefreshCapsAsync(); } };
+        PageChanged += () => { if (Page == "heat") RefreshHeat(); UpdateCapsTimer(); };
         g.Sampled += QueueHeat;
         DismissAllCommand = new Command(() =>
         {
@@ -505,11 +522,33 @@ public sealed class MainViewModel : Observable
         get => _g.Settings.GovernorCapPercent;
         set { _g.Settings.GovernorCapPercent = value; _g.SaveSettings(); _g.ApplyGovernorSettings(); Raise(); }
     }
-    public List<AppCapRowVm> AppCapRows { get; private set; } = new();
-    public string CapsNote { get; private set; } = "Open this page to measure which apps use the processor.";
-    public ICommand SaveCapsCommand { get; private set; } = null!;
-    public ICommand RefreshCapsCommand { get; private set; } = null!;
-    bool _heatQueued, _measuring;
+    /// <summary>Kept, not rebuilt: rows update in place so an open drop-down is not closed under the person's mouse.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<AppCapRowVm> AppCapRows { get; } = new();
+    public string CapsNote { get; private set; } = "Measuring...";
+    bool _heatQueued, _measuring, _windowVisible = true;
+    DispatcherTimer? _capsTimer;
+
+    /// <summary>Set by the app: the caps table measures only while someone is looking at it.</summary>
+    public bool WindowVisible
+    {
+        get => _windowVisible;
+        set { _windowVisible = value; UpdateCapsTimer(); }
+    }
+
+    void UpdateCapsTimer()
+    {
+        bool on = _windowVisible && Page == "heat";
+        if (on && _capsTimer == null)
+        {
+            _capsTimer = new DispatcherTimer(TimeSpan.FromSeconds(5), DispatcherPriority.Background, (_, _) => _ = RefreshCapsAsync(), _ui);
+            _ = RefreshCapsAsync();
+        }
+        else if (!on && _capsTimer != null)
+        {
+            _capsTimer.Stop();
+            _capsTimer = null;
+        }
+    }
 
     void QueueHeat()
     {
@@ -580,13 +619,11 @@ public sealed class MainViewModel : Observable
         }) Raise(name);
     }
 
-    /// <summary>Measures which apps use the processor now (half a second) and lists them with their caps.</summary>
+    /// <summary>Measures which apps use the processor now (half a second) and updates the table in place.</summary>
     async Task RefreshCapsAsync()
     {
         if (_measuring) return;
         _measuring = true;
-        CapsNote = "Measuring...";
-        Raise(nameof(CapsNote));
         try
         {
             var use = _g.IsSample
@@ -596,19 +633,30 @@ public sealed class MainViewModel : Observable
                 .GroupBy(u => u.Name, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.Sum(x => x.Share), StringComparer.OrdinalIgnoreCase);
             var rules = _g.Settings.AppCaps;
-            var names = rules.Select(r => r.App)
+            var wanted = rules.Select(r => r.App)
                 .Concat(byApp.Where(kv => kv.Value >= 0.5).OrderByDescending(kv => kv.Value).Take(20).Select(kv => kv.Key))
-                .Distinct(StringComparer.OrdinalIgnoreCase);
-            AppCapRows = names
-                .Select(n => new AppCapRowVm(n, byApp.TryGetValue(n, out var s) ? s : null, rules.FirstOrDefault(r => r.App.Equals(n, StringComparison.OrdinalIgnoreCase))))
-                .OrderByDescending(r => byApp.GetValueOrDefault(r.App))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+            bool first = AppCapRows.Count == 0;
+            // Update the rows already there; drop apps that closed and have no cap of their own; add new ones at the end.
+            foreach (var row in AppCapRows.ToList())
+            {
+                if (wanted.Contains(row.App, StringComparer.OrdinalIgnoreCase) || row.ToRule() != null)
+                    row.SetUsing(byApp.TryGetValue(row.App, out var s) ? s : null);
+                else
+                    AppCapRows.Remove(row);
+            }
+            var fresh = wanted.Where(n => !AppCapRows.Any(r => r.App.Equals(n, StringComparison.OrdinalIgnoreCase)))
+                .OrderByDescending(n => byApp.GetValueOrDefault(n));
+            foreach (var n in fresh)
+                AppCapRows.Add(new AppCapRowVm(n, byApp.TryGetValue(n, out var s) ? s : null,
+                    rules.FirstOrDefault(r => r.App.Equals(n, StringComparison.OrdinalIgnoreCase)), SaveCaps));
             UpdateCapStatuses();
-            CapsNote = $"Measured at {Fmt.Clock(DateTimeOffset.Now)}. Apps using under 0.5% are left out unless they have a cap.";
+            CapsNote = $"Live: updates every 5 seconds (last at {DateTimeOffset.Now.ToLocalTime():h:mm:ss tt}). Changes apply right away. Apps using under 0.5% are left out unless they have a cap.";
+            if (first) Raise(nameof(AppCapRows));
         }
         catch (Exception ex) { CapsNote = "Could not measure the apps: " + ex.Message; }
         finally { _measuring = false; }
-        Raise(nameof(AppCapRows));
         Raise(nameof(CapsNote));
     }
 
@@ -620,19 +668,20 @@ public sealed class MainViewModel : Observable
             var h = held.FirstOrDefault(x => x.App.Equals(row.Display, StringComparison.OrdinalIgnoreCase));
             row.Status = row.Never ? "Never capped"
                 : h != null ? $"Held at {h.Percent}%{(h.Always ? ", always" : " while hot")}"
-                : row.UsingText == "not running" ? "Not running"
+                : !row.Running ? "Not running"
+                : row.Always ? "Applying..."
                 : "";
         }
     }
 
+    /// <summary>Applies the table as it stands: called by a row the moment the person changes it.</summary>
     void SaveCaps()
     {
-        var rules = AppCapRows.Select(r => r.ToRule()).OfType<AppCapRule>().ToList();
-        _g.Settings.AppCaps = rules;
+        _g.Settings.AppCaps = AppCapRows.Select(r => r.ToRule()).OfType<AppCapRule>().ToList();
         _g.SaveSettings();
         _g.ApplyGovernorSettings();
-        ShowMessage(rules.Count == 0 ? "Saved. No app has a cap of its own." : $"Saved {Fmt.Plural(rules.Count, "app cap", "app caps")}.");
-        _ = Task.Delay(2000).ContinueWith(_ => _ui.BeginInvoke(RefreshHeat), TaskScheduler.Default);
+        UpdateCapStatuses();
+        _ = Task.Delay(1500).ContinueWith(_ => _ui.BeginInvoke(UpdateCapStatuses), TaskScheduler.Default);
     }
 
     // ------------------------------------------------------------ keyboard and settings
