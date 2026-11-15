@@ -6,7 +6,7 @@ namespace LaptopGuardian.Core;
 public enum Severity { Info, Warning, Critical }
 
 [JsonConverter(typeof(JsonStringEnumConverter<IncidentKind>))]
-public enum IncidentKind { GraphicsError, UnexpectedShutdown, HardwareError, GpuHot, GpuMemoryFull, BatteryLow }
+public enum IncidentKind { GraphicsError, UnexpectedShutdown, HardwareError, GpuHot, GpuMemoryFull, BatteryLow, ChargerUnstable }
 
 [JsonConverter(typeof(JsonStringEnumConverter<CrashCause>))]
 public enum CrashCause
@@ -49,6 +49,26 @@ public sealed class Incident
     public CrashInfo? Crash { get; set; }
     /// <summary>What the person saw, for unexpected shutdowns.</summary>
     public string? UserNote { get; set; }
+    /// <summary>The charger dropping out: how often, and over what span.</summary>
+    public ChargerInfo? Charger { get; set; }
+    /// <summary>
+    /// When the person dismissed it. A dismissed alert leaves the Overview, the badges and the status,
+    /// but stays in the history, where it can be brought back.
+    /// </summary>
+    public DateTimeOffset? DismissedAt { get; set; }
+
+    [JsonIgnore]
+    public bool Dismissed => DismissedAt != null;
+}
+
+public sealed class ChargerInfo
+{
+    public DateTimeOffset Start { get; set; }
+    /// <summary>When it was last back on the charger (or the last disconnect, if it never came back).</summary>
+    public DateTimeOffset End { get; set; }
+    public int Disconnects { get; set; }
+    /// <summary>Disconnects too short for a person to have unplugged it.</summary>
+    public int QuickDrops { get; set; }
 }
 
 public sealed class GpuSnapshot
@@ -111,6 +131,8 @@ public sealed class CrashInfo
     public bool ConnectedStandby { get; set; }
     public int SleepInProgress { get; set; }
     public int GraphicsErrorsBefore { get; set; }
+    /// <summary>How many times the charger disconnected in the hour before.</summary>
+    public int ChargerDropsBefore { get; set; }
 }
 
 public sealed record Alert(

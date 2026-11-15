@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.3.0
+
+### New
+- **Dismiss alerts.** Every alert has a dismiss button: in Recent problems, the timeline, the Shutdowns page and the Graphics page, and "Dismiss all" on the Overview. A dismissed alert leaves the Overview, the Shutdowns badge and the red status, but stays in the timeline (faded, with a button to bring it back). The Dismiss button on a notification now dismisses the alert in the app too. The timeline has a "Dismissed" filter.
+- **Charger watch.** LaptopGuardian now notices a charger that keeps cutting out: Windows logs every switch between charger and battery, and nothing else mentions them. A drop of a few seconds is recorded quietly; several drops close together raise an alert and a suggestion with steps to find the fault. Each unexpected shutdown says whether the charger cut out in the hour before, and the health report lists the drops. On the laptop this was built for, the plug had been dropping out for seven weeks, including five times in the 30 minutes before a sudden reset.
+
+### Fixed
+- **Hiding a suggestion hid it for good.** The advice about sudden resets stayed hidden through four more resets in one night. A hidden suggestion now comes back when the problem happens again, and a hidden driver or BIOS update comes back when a newer version is out. Suggestions hidden in earlier versions count as hidden on the day you update.
+- Working out an older crash again no longer loses the flight recorder reading saved with it.
+
 ## 2.2.2
 
 ### Fixed

@@ -21,7 +21,8 @@ public sealed class Guardian : IDisposable
     readonly object _scanGate = new();
     readonly Dictionary<string, DateTimeOffset> _lastAlert = new();
     readonly DateTimeOffset _startedAt = DateTimeOffset.Now;
-    EventLogWatcher? _watcher;
+    readonly object _hiddenGate = new(), _chargerGate = new();
+    EventLogWatcher? _watcher, _chargerWatcher;
     Timer? _batteryTimer, _rescanTimer;
     int _batteryAlertLevel = 101;
     DateTimeOffset? _hotSince, _memSince;
@@ -96,6 +97,7 @@ public sealed class Guardian : IDisposable
         Journal = new Journal(dataDir == null ? null : Path.Combine(dataDir, "journal.json"));
         Settings = JsonFile.Load<AppSettings>(dataDir == null ? null : Path.Combine(dataDir, "settings.json"));
         State = JsonFile.Load<AppState>(dataDir == null ? null : Path.Combine(dataDir, "state.json"));
+        if (State.MigrateHidden(DateTimeOffset.Now)) SaveState();
         Journal.Changed += () => Changed?.Invoke();
         Gpu.Sampled += OnGpuSample;
     }
@@ -110,6 +112,7 @@ public sealed class Guardian : IDisposable
         ApplyKeyboardSettings();
         Gpu.Start();
         StartWatcher();
+        StartChargerWatcher();
         _batteryTimer = new Timer(_ => CheckBattery(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(60));
         // Full scan now, then every six hours (Windows Error Reporting retries on its own four-hour clock).
         _rescanTimer = new Timer(_ => Scan(), null, TimeSpan.FromSeconds(1), TimeSpan.FromHours(6));
@@ -240,6 +243,61 @@ public sealed class Guardian : IDisposable
         Recompute();
     }
 
+    void StartChargerWatcher()
+    {
+        try
+        {
+            _chargerWatcher = new EventLogWatcher(new EventLogQuery("System", PathType.LogName, Charger.XPath()));
+            _chargerWatcher.EventRecordWritten += OnChargerEvent;
+            _chargerWatcher.Enabled = true;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine(ex);
+            _chargerWatcher = null;
+        }
+    }
+
+    void OnChargerEvent(object? sender, EventRecordWrittenEventArgs e)
+    {
+        if (e.EventException != null)
+        {
+            ThreadPool.QueueUserWorkItem(_ => { Thread.Sleep(5000); try { _chargerWatcher?.Dispose(); } catch { } StartChargerWatcher(); });
+            return;
+        }
+        using var r = e.EventRecord;
+        if (r == null || !IsFresh(EventLogX.Time(r), DateTimeOffset.Now)) return;
+        try { CheckCharger(); } catch (Exception ex) { Debug.WriteLine(ex); }
+    }
+
+    /// <summary>
+    /// Looks at the last few hours of charger switches. Records a drop too short to be a person unplugging it,
+    /// and announces a charger that keeps cutting out (once per episode).
+    /// </summary>
+    void CheckCharger()
+    {
+        lock (_chargerGate)
+        {
+            var latest = Charger.Episodes(Charger.Read(TimeSpan.FromHours(6))).LastOrDefault();
+            if (latest is not { Notable: true }) return;
+            var inc = Charger.ToIncident(latest);
+            bool wasUnstable = Journal.Find(inc.Id)?.Severity >= Severity.Warning;
+            Journal.Upsert(inc);
+            Journal.Save();
+            if (latest.Unstable && !wasUnstable)
+            {
+                // It got worse: a blip the person dismissed is now a real alert.
+                Journal.SetDismissed(new[] { inc.Id }, false);
+                if (Settings.NotifyCharger)
+                    Raise("charger", TimeSpan.FromMinutes(30), new Alert(inc.Kind, inc.Severity, "Your charger keeps cutting out",
+                        $"It disconnected {Fmt.Plural(latest.Disconnects, "time", "times")} since {Fmt.Clock(latest.Start)}. " +
+                        "Push the plug fully in and try another wall socket. A charger that drops out under load can switch the laptop off.",
+                        "timeline", inc.Id));
+            }
+            Recompute();
+        }
+    }
+
     /// <summary>Only events written in the last few minutes are news. Anything older is history, recorded quietly.</summary>
     public static bool IsFresh(DateTimeOffset eventTime, DateTimeOffset now) =>
         eventTime <= now.AddMinutes(1) && now - eventTime < TimeSpan.FromMinutes(10);
@@ -292,11 +350,18 @@ public sealed class Guardian : IDisposable
                     missed.Add(inc);
             Mark("graphics history");
 
+            // The charger cutting out, including while LaptopGuardian was not running.
+            lock (_chargerGate)
+                foreach (var ep in Charger.Episodes(Charger.Read(TimeSpan.FromDays(60))).Where(e => e.Notable))
+                    Journal.Upsert(Charger.ToIncident(ep));
+            Mark("charger");
+
             // Unexpected shutdowns.
             var newCrashes = new List<Incident>();
             // Work out new crashes, and any recorded by older reasoning (keeping what the person noted about them).
             foreach (var found in CrashScanner.Scan(TimeSpan.FromDays(60), Battery, Recorder,
-                t => (Journal.Find(CrashScanner.IdFor(t))?.Crash?.ClassifierVersion ?? 0) < CrashClassifier.Version))
+                t => (Journal.Find(CrashScanner.IdFor(t))?.Crash?.ClassifierVersion ?? 0) < CrashClassifier.Version,
+                t => Journal.Find(CrashScanner.IdFor(t))?.Crash?.LastReading))
             {
                 var inc = CrashScanner.ToIncident(found);
                 bool isNew = !Journal.Contains(inc.Id);
@@ -407,7 +472,9 @@ public sealed class Guardian : IDisposable
         try
         {
             var f = Findings();
-            Recommendations = Advisor.Advise(f).Where(r => !State.DismissedRecommendations.Contains(r.Id)).ToList();
+            var all = Advisor.Advise(f);
+            lock (_hiddenGate)
+                Recommendations = all.Where(r => !State.HiddenSuggestions.TryGetValue(r.Id, out var h) || Advisor.ComesBack(r, h, f)).ToList();
         }
         catch { }
         Changed?.Invoke();
@@ -415,16 +482,50 @@ public sealed class Guardian : IDisposable
 
     public void RestoreDismissed()
     {
-        State.DismissedRecommendations.Clear();
-        SaveState();
+        lock (_hiddenGate)
+        {
+            State.HiddenSuggestions.Clear();
+            State.DismissedRecommendations.Clear();
+            SaveState();
+        }
         Recompute();
     }
 
+    /// <summary>Hides a suggestion until the problem happens again (or, for an update, a newer version comes out).</summary>
     public void Dismiss(string recommendationId)
     {
-        if (!State.DismissedRecommendations.Contains(recommendationId)) State.DismissedRecommendations.Add(recommendationId);
-        SaveState();
+        lock (_hiddenGate)
+        {
+            State.HiddenSuggestions[recommendationId] = new HiddenSuggestion
+            {
+                At = DateTimeOffset.Now,
+                Title = Recommendations.FirstOrDefault(r => r.Id == recommendationId)?.Title,
+            };
+            SaveState();
+        }
         Recompute();
+    }
+
+    // ---------------------------------------------------------------- dismissing alerts
+
+    public void DismissAlerts(IEnumerable<string> ids)
+    {
+        Journal.SetDismissed(ids, true);
+        Recompute();
+    }
+
+    public void RestoreAlerts(IEnumerable<string> ids)
+    {
+        Journal.SetDismissed(ids, false);
+        Recompute();
+    }
+
+    /// <summary>Dismisses every alert still showing (warnings and worse). Returns how many.</summary>
+    public int DismissAllAlerts()
+    {
+        int n = Journal.SetDismissed(Journal.Items.Where(i => !i.Dismissed && i.Severity >= Severity.Warning).Select(i => i.Id), true);
+        Recompute();
+        return n;
     }
 
     // ---------------------------------------------------------------- sample data
@@ -451,18 +552,21 @@ public sealed class Guardian : IDisposable
         };
         Battery = new BatteryReport { DesignMWh = 60000, FullMWh = 51600, Cycles = 212, ModernStandby = true };
 
-        Incident Crash(int minutesAgo, int gapSeconds, FlightSample? reading, uint bug = 0, bool standby = false, DateTimeOffset? asleep = null)
+        Incident Crash(int minutesAgo, int gapSeconds, FlightSample? reading, uint bug = 0, bool standby = false, DateTimeOffset? asleep = null, int chargerDrops = 0)
         {
             var back = now.AddMinutes(-minutesAgo);
             var active = back.AddSeconds(-gapSeconds);
-            var facts = new CrashFacts { RestartedAt = back, LastActivity = active, LastReading = reading, BugcheckCode = bug, ConnectedStandby = standby, AsleepSince = asleep };
+            var facts = new CrashFacts { RestartedAt = back, LastActivity = active, LastReading = reading, BugcheckCode = bug, ConnectedStandby = standby, AsleepSince = asleep, ChargerDropsBefore = chargerDrops };
             var e = new KernelPower41(minutesAgo, back, bug, 0, 0, false, standby);
             return CrashScanner.ToIncident(new CrashScanner.Found(e, facts, CrashClassifier.Classify(facts)));
         }
         var hot = new FlightSample { At = now.AddMinutes(-95).AddSeconds(-24), ZoneC = 96, GpuC = 87, GpuLimitC = 87, GpuBusyPct = 99, GpuMemoryPct = 91, GpuW = 112, OnAc = true, TopApps = "Game.exe 92%, Browser.exe 4%" };
-        Journal.Add(Crash(95, 24, hot), save: false);
+        Journal.Add(Crash(95, 24, hot, chargerDrops: 4), save: false);
         Journal.Add(Crash(60 * 27, 31, hot with { At = now.AddMinutes(-60 * 27).AddSeconds(-31), GpuC = 86 }), save: false);
-        Journal.Add(Crash(60 * 24 * 9, 300, null, bug: 0x116), save: false);
+        var old = Crash(60 * 24 * 9, 300, null, bug: 0x116);
+        old.DismissedAt = now.AddDays(-8);
+        Journal.Add(old, save: false);
+        Journal.Add(Charger.ToIncident(new ChargerEpisode(now.AddMinutes(-128), now.AddMinutes(-121), 4, 2)), save: false);
         var gpu = GraphicsEvents.Decode("nvlddmkm", 153, 2, new[] { @"\Device\Video3", "Error occurred on GPUID: 100" });
         Journal.Add(new Incident
         {
@@ -650,6 +754,7 @@ public sealed class Guardian : IDisposable
     public void Dispose()
     {
         try { if (_watcher != null) { _watcher.Enabled = false; _watcher.Dispose(); } } catch { }
+        try { if (_chargerWatcher != null) { _chargerWatcher.Enabled = false; _chargerWatcher.Dispose(); } } catch { }
         _batteryTimer?.Dispose();
         _rescanTimer?.Dispose();
         _driverTimer?.Dispose();

@@ -74,11 +74,24 @@ public static class ReportBuilder
                 line.Add($"restarted {Fmt.When(ci.RestartedAt)}");
                 if (ci.PowerButtonPressedAt is DateTimeOffset pb) line.Add($"power button held {Fmt.When(pb)}");
                 if (ci.BugcheckCode != 0) line.Add($"stop code 0x{ci.BugcheckCode:X} {ci.BugcheckName}");
+                if (ci.ChargerDropsBefore > 0) line.Add($"charger cut out {ci.ChargerDropsBefore}x in the hour before");
                 sb.AppendLine($"  - {string.Join("; ", line)}");
             }
             if (!string.IsNullOrWhiteSpace(c.UserNote)) sb.AppendLine($"  - What I saw: {c.UserNote}");
         }
         sb.AppendLine();
+
+        var drops = f.ChargerDrops(TimeSpan.FromDays(60)).OrderByDescending(c => c.Time).ToList();
+        if (drops.Count > 0)
+        {
+            sb.AppendLine($"## Charger dropouts (last 60 days): {drops.Sum(d => d.Charger?.Disconnects ?? 1)}");
+            sb.AppendLine();
+            sb.AppendLine("Times Windows switched to battery and back within seconds, or several times in a few minutes (Kernel-Power event 105).");
+            sb.AppendLine();
+            foreach (var d in drops)
+                sb.AppendLine($"- {Fmt.When(d.Time)}: {d.Title}. {d.Summary}");
+            sb.AppendLine();
+        }
 
         var gfx = f.Incidents.Where(i => i.Kind is IncidentKind.GraphicsError or IncidentKind.HardwareError && f.Now - i.Time <= TimeSpan.FromDays(60))
             .OrderByDescending(i => i.Time).ToList();

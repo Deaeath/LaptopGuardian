@@ -41,8 +41,11 @@ internal static class Look
     public static Brush For(Severity s) => Theme.Brush(s switch { Severity.Critical => "Bad", Severity.Warning => "Warn", _ => "Info" });
     public static Brush Tint(Severity s) => Theme.Brush(s switch { Severity.Critical => "BadTint", Severity.Warning => "WarnTint", _ => "InfoTint" });
 
+    public const double DismissedOpacity = 0.55;
+
     public static string Glyph(IncidentKind k) => k switch
     {
+        IncidentKind.ChargerUnstable => "", // lightning bolt
         IncidentKind.UnexpectedShutdown => "",
         IncidentKind.GraphicsError => "",
         IncidentKind.GpuMemoryFull => "",
@@ -65,9 +68,13 @@ public sealed class NavItem : Observable
 
 public sealed class IncidentVm
 {
-    public IncidentVm(Incident i, bool showDay)
+    public IncidentVm(Incident i, bool showDay, MainViewModel? vm = null)
     {
         Model = i;
+        Dismissed = i.Dismissed;
+        DismissedText = i.DismissedAt is DateTimeOffset d ? "Dismissed " + Fmt.WhenInSentence(d) : null;
+        DismissCommand = new Command(() => vm?.DismissAlert(i.Id));
+        RestoreCommand = new Command(() => vm?.RestoreAlert(i.Id));
         Title = i.Title;
         Summary = i.Summary;
         When = Fmt.When(i.Time);
@@ -98,6 +105,11 @@ public sealed class IncidentVm
     public string? Source { get; }
     public string? Context { get; }
     public string? Note { get; }
+    public bool Dismissed { get; }
+    public string? DismissedText { get; }
+    public double Opacity => Dismissed ? Look.DismissedOpacity : 1;
+    public ICommand DismissCommand { get; }
+    public ICommand RestoreCommand { get; }
 }
 
 public sealed record StepVm(string Time, string Label, Brush Brush);
@@ -117,10 +129,14 @@ public sealed class CrashVm : Observable
     readonly Action<string, string?> _save;
     string? _note;
 
-    public CrashVm(Incident i, Action<string, string?> save)
+    public CrashVm(Incident i, Action<string, string?> save, MainViewModel? vm = null)
     {
         _save = save;
         Id = i.Id;
+        Dismissed = i.Dismissed;
+        DismissedText = i.DismissedAt is DateTimeOffset d ? "Dismissed " + Fmt.WhenInSentence(d) : null;
+        DismissCommand = new Command(() => vm?.DismissAlert(i.Id));
+        RestoreCommand = new Command(() => vm?.RestoreAlert(i.Id));
         Title = i.Title;
         Summary = i.Summary;
         Detail = i.Detail;
@@ -145,6 +161,7 @@ public sealed class CrashVm : Observable
             if (c.OnAc is bool ac) facts.Add(ac ? "Plugged in" : "On battery");
             facts.Add(c.BugcheckCode != 0 ? $"stop code 0x{c.BugcheckCode:X} {c.BugcheckName}" : "no error code");
             if (c.GraphicsErrorsBefore > 0) facts.Add(Fmt.Plural(c.GraphicsErrorsBefore, "graphics error", "graphics errors") + " in the hour before");
+            if (c.ChargerDropsBefore > 0) facts.Add($"charger cut out {(c.ChargerDropsBefore == 1 ? "once" : $"{c.ChargerDropsBefore} times")} in the hour before");
             if (c.LastActivity is DateTimeOffset act2 && c.RestartedAt > act2) facts.Add($"restarted {Fmt.Span(c.RestartedAt - act2)} later");
             Facts = string.Join("  ·  ", facts);
         }
@@ -161,6 +178,11 @@ public sealed class CrashVm : Observable
     public List<StepVm> Steps { get; }
     public string? Facts { get; }
     public IReadOnlyList<string> AnswerOptions => Answers;
+    public bool Dismissed { get; }
+    public string? DismissedText { get; }
+    public double Opacity => Dismissed ? Look.DismissedOpacity : 1;
+    public ICommand DismissCommand { get; }
+    public ICommand RestoreCommand { get; }
 
     public string? Note
     {
@@ -264,6 +286,11 @@ public sealed class MainViewModel : Observable
         CheckDriversCommand = new Command(() => _ = _g.CheckDriversAsync());
         CheckUpdatesCommand = new Command(() => CheckForUpdatesRequested?.Invoke());
         RestoreSuggestionsCommand = new Command(() => { _g.RestoreDismissed(); ShowMessage("Hidden suggestions are back on the Overview page."); });
+        DismissAllCommand = new Command(() =>
+        {
+            int n = _g.DismissAllAlerts();
+            if (n > 0) ShowMessage($"Dismissed {Fmt.Plural(n, "alert", "alerts")}. They stay in the timeline, where you can bring them back.");
+        });
 
         AppIcon = LoadIcon();
 
@@ -358,7 +385,7 @@ public sealed class MainViewModel : Observable
 
     // ------------------------------------------------------------ timeline and shutdowns
 
-    public IReadOnlyList<string> TimelineFilters { get; } = new[] { "Everything", "Shutdowns", "Graphics errors", "Alerts" };
+    public IReadOnlyList<string> TimelineFilters { get; } = new[] { "Everything", "Shutdowns", "Graphics errors", "Charger", "Alerts", "Dismissed" };
     public string TimelineFilter
     {
         get => _timelineFilter;
@@ -424,6 +451,7 @@ public sealed class MainViewModel : Observable
     public bool NotifyMemory { get => _g.Settings.NotifyMemory; set { _g.Settings.NotifyMemory = value; _g.SaveSettings(); Raise(); } }
     public bool NotifyBattery { get => _g.Settings.NotifyBattery; set { _g.Settings.NotifyBattery = value; _g.SaveSettings(); Raise(); } }
     public bool NotifyHardware { get => _g.Settings.NotifyHardware; set { _g.Settings.NotifyHardware = value; _g.SaveSettings(); Raise(); } }
+    public bool NotifyCharger { get => _g.Settings.NotifyCharger; set { _g.Settings.NotifyCharger = value; _g.SaveSettings(); Raise(); } }
 
     // ------------------------------------------------------------ message bar
 
@@ -463,6 +491,7 @@ public sealed class MainViewModel : Observable
     public ICommand CheckDriversCommand { get; }
     public ICommand CheckUpdatesCommand { get; }
     public ICommand RestoreSuggestionsCommand { get; }
+    public ICommand DismissAllCommand { get; }
     public string ThermalZoneText => _g.ThermalZoneC is double z ? $"{z:0}°C" : "Not available";
     public string RepoUrl => $"https://github.com/{AppUpdater.Repo}";
     public string IssuesUrl => RepoUrl + "/issues/new/choose";
@@ -556,6 +585,8 @@ public sealed class MainViewModel : Observable
     }
 
     public void Dismiss(string recommendationId) => _g.Dismiss(recommendationId);
+    public void DismissAlert(string id) => _g.DismissAlerts(new[] { id });
+    public void RestoreAlert(string id) => _g.RestoreAlerts(new[] { id });
 
     public static void Open(string? target)
     {
@@ -624,7 +655,8 @@ public sealed class MainViewModel : Observable
         LastShutdownText = crashes.FirstOrDefault() is Incident last
             ? $"Last: {Fmt.When(last.Time)}, {char.ToLowerInvariant(last.Title[0])}{last.Title[1..]}."
             : "No unexpected shutdowns in the last 60 days.";
-        Nav[2].Badge = c7 > 0 ? c7.ToString() : null;
+        int open7 = f.Crashes(TimeSpan.FromDays(7)).Count(c => !c.Dismissed);
+        Nav[2].Badge = open7 > 0 ? open7.ToString() : null;
 
         // Battery
         var (pct, ac) = Guardian.PowerStatus();
@@ -668,27 +700,31 @@ public sealed class MainViewModel : Observable
 
         // Lists, rebuilt only when something in them changed (rebuilding resets open drop-downs).
         var items = f.Incidents;
+        // Dismissing changes no count above, so the dismissed ids are part of the signature too.
         string sig = string.Join("|", items.Count, items.FirstOrDefault()?.Id, string.Join(",", recs.Select(r => r.Id + r.ActionLabel)),
-            f.KernelReports.Count, f.KernelReports.Sum(k => k.TimesLogged), _timelineFilter, Theme.IsDark, DateTime.Today, f.Drivers?.CheckedAt);
+            f.KernelReports.Count, f.KernelReports.Sum(k => k.TimesLogged), _timelineFilter, Theme.IsDark, DateTime.Today, f.Drivers?.CheckedAt,
+            string.Join(",", items.Where(i => i.Dismissed).Select(i => i.Id)), items.Sum(i => i.Charger?.Disconnects ?? 0));
         if (sig != _signature)
         {
             _signature = sig;
             Recommendations = recs.Select(r => new RecommendationVm(r, this)).ToList();
-            Recent = items.Where(i => i.Severity >= Severity.Warning).Take(6).Select(i => new IncidentVm(i, false)).ToList();
+            Recent = items.Where(i => i.Severity >= Severity.Warning && !i.Dismissed).Take(6).Select(i => new IncidentVm(i, false, this)).ToList();
             Timeline = WithDays(items.Where(i => _timelineFilter switch
             {
                 "Shutdowns" => i.Kind == IncidentKind.UnexpectedShutdown,
                 "Graphics errors" => i.Kind is IncidentKind.GraphicsError or IncidentKind.HardwareError,
-                "Alerts" => i.Kind is IncidentKind.GpuHot or IncidentKind.GpuMemoryFull or IncidentKind.BatteryLow,
+                "Charger" => i.Kind == IncidentKind.ChargerUnstable,
+                "Alerts" => i.Kind is IncidentKind.GpuHot or IncidentKind.GpuMemoryFull or IncidentKind.BatteryLow or IncidentKind.ChargerUnstable,
+                "Dismissed" => i.Dismissed,
                 _ => true,
-            }).Take(400));
-            Crashes = crashes.Take(60).Select(c => new CrashVm(c, SaveNote)).ToList();
+            }).Take(400), this);
+            Crashes = crashes.Take(60).Select(c => new CrashVm(c, SaveNote, this)).ToList();
             int asleep = crashes.Count(c => c.Crash != null && CrashScanner.IsAsleepCause(c.Crash.Cause));
             CrashSummary = crashes.Count == 0
                 ? "None in the last 60 days."
                 : $"{Fmt.Plural(crashes.Count, "unexpected shutdown", "unexpected shutdowns")} in the last 60 days{(asleep > 0 ? $", {asleep} of them while asleep" : "")}." +
                   (crashes.Count >= 2 && crashes.Take(2).All(c => c.Crash != null && CrashScanner.IsAsleepCause(c.Crash.Cause)) ? " The two most recent both happened during sleep." : "");
-            GraphicsErrors = items.Where(i => i.Kind is IncidentKind.GraphicsError or IncidentKind.HardwareError).Take(60).Select(i => new IncidentVm(i, false)).ToList();
+            GraphicsErrors = items.Where(i => i.Kind is IncidentKind.GraphicsError or IncidentKind.HardwareError).Take(60).Select(i => new IncidentVm(i, false, this)).ToList();
 
             var stuck = f.KernelReports.Where(k => k.Stuck).ToList();
             HasStuckReports = stuck.Count > 0;
@@ -707,14 +743,14 @@ public sealed class MainViewModel : Observable
         Raise(string.Empty);
     }
 
-    static List<IncidentVm> WithDays(IEnumerable<Incident> items)
+    static List<IncidentVm> WithDays(IEnumerable<Incident> items, MainViewModel vm)
     {
         var list = new List<IncidentVm>();
         string? day = null;
         foreach (var i in items)
         {
             var d = Fmt.Day(i.Time);
-            list.Add(new IncidentVm(i, d != day));
+            list.Add(new IncidentVm(i, d != day, vm));
             day = d;
         }
         return list;

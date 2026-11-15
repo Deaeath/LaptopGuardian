@@ -20,6 +20,16 @@ public sealed record Findings
     /// <summary>Graphics errors that matter (diagnostic snapshots Windows takes alongside them are left out).</summary>
     public IEnumerable<Incident> GraphicsErrors(TimeSpan within) =>
         Incidents.Where(i => i.Kind == IncidentKind.GraphicsError && i.Severity >= Severity.Warning && Now - i.Time <= within);
+
+    public IEnumerable<Incident> ChargerDrops(TimeSpan within) =>
+        Incidents.Where(i => i.Kind == IncidentKind.ChargerUnstable && Now - i.Time <= within);
+}
+
+/// <summary>A suggestion the person hid, and what it said at the time.</summary>
+public sealed class HiddenSuggestion
+{
+    public DateTimeOffset At { get; set; }
+    public string? Title { get; set; }
 }
 
 /// <summary>Turns findings into a short list of things to do, most important first.</summary>
@@ -91,6 +101,32 @@ public static class Advisor
                 LinkLabel: "Test the memory", LinkUrl: "mdsched.exe");
             // Whichever explains more of the recent crashes goes first.
             if (unexplained.Count >= asleep14.Count) list.Insert(0, rec); else list.Add(rec);
+        }
+
+        // 1c. The charger cutting out: a concrete, fixable cause, so it goes first when a crash followed it.
+        var charger14 = f.ChargerDrops(TimeSpan.FromDays(14)).OrderByDescending(c => c.Time).ToList();
+        int unstable = charger14.Count(c => c.Severity >= Severity.Warning);
+        if (unstable > 0 || charger14.Count >= 3)
+        {
+            int drops = charger14.Sum(c => c.Charger?.Disconnects ?? 1);
+            var after = crashes14.Where(c => c.Crash?.ChargerDropsBefore > 0).ToList();
+            string title = after.Count switch
+            {
+                0 => "The charger keeps cutting out",
+                1 => "The charger cut out before a crash",
+                var n => $"The charger cut out before {n} crashes",
+            };
+            var body = new StringBuilder();
+            body.Append($"In the last two weeks the laptop lost power from the charger {Fmt.Plural(drops, "time", "times")}, most recently {Fmt.WhenInSentence(charger14[0].Time)}. ");
+            if (after.Count > 0)
+                body.Append(after.Count == crashes14.Count && after.Count > 1
+                    ? "Every unexpected shutdown in that time came within an hour of the charger cutting out. "
+                    : $"{Fmt.Plural(after.Count, "unexpected shutdown", "unexpected shutdowns")} came within an hour of the charger cutting out. ");
+            body.Append(Charger.Advice);
+            if (f.Battery?.HealthPct is double bh && bh < 80)
+                body.Append($" The battery holds only {bh:0}% of its original charge, so it has less in reserve when the charger drops.");
+            var rec = new Recommendation("charger", after.Count > 0 ? Severity.Critical : Severity.Warning, title, body.ToString());
+            if (after.Count > 0) list.Insert(0, rec); else list.Add(rec);
         }
 
         // 2. BIOS: the usual fix for sleep and stability problems on laptops. Ask the maker when we can.
@@ -212,11 +248,41 @@ public static class Advisor
             .ToList();
     }
 
-    /// <summary>One line for the status banner and tray tooltip.</summary>
+    /// <summary>
+    /// Whether a suggestion the person hid comes back. It does when the problem happens again after they hid it
+    /// (a crash for the crash advice), or when an update suggestion names a newer version. On 15 November 2026,
+    /// "Your laptop reset itself" stayed hidden for good through four more resets in one night.
+    /// </summary>
+    public static bool ComesBack(Recommendation r, HiddenSuggestion hidden, Findings f)
+    {
+        IncidentKind[]? kinds = r.Id switch
+        {
+            "sudden-resets" or "sleep-deaths" => new[] { IncidentKind.UnexpectedShutdown },
+            "gpu-resets" => new[] { IncidentKind.GraphicsError },
+            "charger" => new[] { IncidentKind.ChargerUnstable, IncidentKind.UnexpectedShutdown },
+            _ => null,
+        };
+        if (kinds != null)
+            return f.Incidents.Any(i => kinds.Contains(i.Kind) && i.Severity >= Severity.Warning && i.Time > hidden.At);
+        if (r.Id is "nvidia-driver" or "amd-driver" or "bios" or "wu-drivers")
+            return hidden.Title != null && hidden.Title != r.Title;
+        return false;
+    }
+
+    /// <summary>One line for the status banner and tray tooltip. Dismissed alerts calm it down but do not hide the facts.</summary>
     public static (Severity Level, string Headline, string Summary) Status(Findings f, IReadOnlyList<Recommendation> recs)
     {
         var crashes7 = f.Crashes(TimeSpan.FromDays(7)).ToList();
         var gfx7 = f.GraphicsErrors(TimeSpan.FromDays(7)).ToList();
+        bool openCrashes = crashes7.Any(c => !c.Dismissed), openGfx = gfx7.Any(g => !g.Dismissed);
+        if (crashes7.Count > 0 && !openCrashes)
+        {
+            if (openGfx)
+                return (Severity.Warning, "Keep an eye on it", $"{Fmt.Plural(gfx7.Count, "graphics error", "graphics errors")} this week. " +
+                    $"{Fmt.Plural(crashes7.Count, "unexpected shutdown", "unexpected shutdowns")}, dismissed.");
+            return (Severity.Warning, "Keep an eye on it",
+                $"{Fmt.Plural(crashes7.Count, "unexpected shutdown", "unexpected shutdowns")} this week, {(crashes7.Count == 1 ? "dismissed" : "all dismissed")}. Nothing new since.");
+        }
         if (crashes7.Count > 0)
         {
             int asleep = crashes7.Count(c => c.Crash != null && CrashScanner.IsAsleepCause(c.Crash.Cause));
@@ -229,10 +295,12 @@ public static class Advisor
                 $"{Fmt.Plural(crashes7.Count, "unexpected shutdown", "unexpected shutdowns")} this week{tail}." +
                 (gfx7.Count > 0 ? $" {Fmt.Plural(gfx7.Count, "graphics error", "graphics errors")}." : ""));
         }
-        if (gfx7.Count > 0)
+        if (openGfx)
             return (Severity.Warning, "Keep an eye on it", $"{Fmt.Plural(gfx7.Count, "graphics error", "graphics errors")} this week, no crashes.");
         if (recs.Any(r => r.Severity >= Severity.Warning))
             return (Severity.Warning, "Mostly fine", recs.First(r => r.Severity >= Severity.Warning).Title + ".");
+        if (gfx7.Count > 0)
+            return (Severity.Info, "All good", $"No crashes this week. {Fmt.Plural(gfx7.Count, "graphics error", "graphics errors")}, dismissed.");
         return (Severity.Info, "All good", "No crashes or graphics errors this week.");
     }
 }

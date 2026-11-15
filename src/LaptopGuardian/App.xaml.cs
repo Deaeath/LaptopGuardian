@@ -108,6 +108,7 @@ public partial class App : Application
 
         Notifier.Init();
         Notifier.Activated = (page, id) => Dispatcher.BeginInvoke(() => ShowWindow(page));
+        Notifier.DismissRequested = id => _engine?.DismissAlerts(new[] { id });
         _engine.AlertRaised += a => Dispatcher.BeginInvoke(() =>
         {
             if (!Notifier.Show(a)) _tray?.Balloon(a);

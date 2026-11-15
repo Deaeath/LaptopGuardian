@@ -17,24 +17,41 @@
         <local:HasValue x:Key="Has" />
         <local:NotVisible x:Key="NotVis" />
 
+        <!-- Dismiss an alert, or bring a dismissed one back. One button shows at a time. -->
+        <DataTemplate x:Key="DismissButtons">
+            <Grid>
+                <Button Style="{StaticResource IconButton}" Content="&#xE711;" Command="{Binding DismissCommand}"
+                        ToolTip="Dismiss. It stays in the timeline, where you can bring it back." AutomationProperties.Name="Dismiss"
+                        Visibility="{Binding Dismissed, Converter={StaticResource NotVis}}" />
+                <Button Style="{StaticResource IconButton}" Content="&#xE7A7;" Command="{Binding RestoreCommand}"
+                        ToolTip="Bring it back" AutomationProperties.Name="Bring it back"
+                        Visibility="{Binding Dismissed, Converter={StaticResource Vis}}" />
+            </Grid>
+        </DataTemplate>
+
         <!-- One row in a list of incidents. -->
         <DataTemplate x:Key="IncidentRow">
-            <Border BorderBrush="{DynamicResource Stroke}" BorderThickness="0,0,0,1" Padding="18,13">
+            <Border BorderBrush="{DynamicResource Stroke}" BorderThickness="0,0,0,1" Padding="18,13,10,13">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Tint}" VerticalAlignment="Top">
+                    <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Tint}" VerticalAlignment="Top" Opacity="{Binding Opacity}">
                         <TextBlock Style="{StaticResource Glyph}" Text="{Binding Glyph}" Foreground="{Binding Brush}" FontSize="15"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
-                    <StackPanel Grid.Column="1" Margin="14,0,16,0">
+                    <StackPanel Grid.Column="1" Margin="14,0,16,0" Opacity="{Binding Opacity}">
                         <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
                         <TextBlock Text="{Binding Summary}" Style="{StaticResource Small}" Margin="0,3,0,0" />
+                        <TextBlock Text="{Binding DismissedText}" Style="{StaticResource FaintText}" Margin="0,4,0,0"
+                                   Visibility="{Binding DismissedText, Converter={StaticResource Has}}" />
                     </StackPanel>
-                    <TextBlock Grid.Column="2" Text="{Binding When}" Style="{StaticResource Small}" VerticalAlignment="Top" TextWrapping="NoWrap" />
+                    <TextBlock Grid.Column="2" Text="{Binding When}" Style="{StaticResource Small}" VerticalAlignment="Top" TextWrapping="NoWrap" Opacity="{Binding Opacity}" />
+                    <ContentControl Grid.Column="3" Content="{Binding}" ContentTemplate="{StaticResource DismissButtons}" Focusable="False"
+                                    VerticalAlignment="Top" Margin="6,-5,0,0" />
                 </Grid>
             </Border>
         </DataTemplate>
@@ -44,18 +61,19 @@
             <StackPanel>
                 <TextBlock Text="{Binding Day}" Style="{StaticResource CardLabel}" Margin="2,18,0,8"
                            Visibility="{Binding ShowDay, Converter={StaticResource Vis}}" />
-                <Border Style="{StaticResource Card}" Padding="18,14" Margin="0,0,0,8">
+                <Border Style="{StaticResource Card}" Padding="18,14,10,14" Margin="0,0,0,8">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Tint}" VerticalAlignment="Top">
+                        <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Tint}" VerticalAlignment="Top" Opacity="{Binding Opacity}">
                             <TextBlock Style="{StaticResource Glyph}" Text="{Binding Glyph}" Foreground="{Binding Brush}" FontSize="15"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
-                        <StackPanel Grid.Column="1" Margin="14,0,16,0">
+                        <StackPanel Grid.Column="1" Margin="14,0,16,0" Opacity="{Binding Opacity}">
                             <TextBlock Text="{Binding Title}" FontSize="14.5" FontWeight="SemiBold" TextWrapping="Wrap" />
                             <TextBlock Text="{Binding Summary}" Style="{StaticResource Body}" Foreground="{DynamicResource Muted}" Margin="0,3,0,0" />
                             <TextBlock Text="{Binding Detail}" Style="{StaticResource Small}" Margin="0,8,0,0"
@@ -66,8 +84,12 @@
                                        Visibility="{Binding Note, Converter={StaticResource Has}}" />
                             <TextBlock Text="{Binding Source}" Style="{StaticResource FaintText}" Margin="0,8,0,0"
                                        Visibility="{Binding Source, Converter={StaticResource Has}}" />
+                            <TextBlock Text="{Binding DismissedText}" Style="{StaticResource FaintText}" Margin="0,4,0,0"
+                                       Visibility="{Binding DismissedText, Converter={StaticResource Has}}" />
                         </StackPanel>
-                        <TextBlock Grid.Column="2" Text="{Binding Clock}" Style="{StaticResource Small}" VerticalAlignment="Top" TextWrapping="NoWrap" />
+                        <TextBlock Grid.Column="2" Text="{Binding Clock}" Style="{StaticResource Small}" VerticalAlignment="Top" TextWrapping="NoWrap" Opacity="{Binding Opacity}" />
+                        <ContentControl Grid.Column="3" Content="{Binding}" ContentTemplate="{StaticResource DismissButtons}" Focusable="False"
+                                        VerticalAlignment="Top" Margin="6,-5,0,0" />
                     </Grid>
                 </Border>
             </StackPanel>
@@ -105,7 +127,7 @@
                                 </Button>
                             </WrapPanel>
                         </StackPanel>
-                        <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="&#xE711;" ToolTip="Hide this suggestion" AutomationProperties.Name="Hide this suggestion"
+                        <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="&#xE711;" ToolTip="Hide this suggestion. It comes back if the problem happens again." AutomationProperties.Name="Hide this suggestion"
                                 Command="{Binding DismissCommand}" VerticalAlignment="Top" Margin="8,-4,0,0" />
                     </Grid>
                 </Grid>
@@ -121,15 +143,23 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Tint}">
+                        <Border Width="34" Height="34" CornerRadius="17" Background="{Binding Tint}" Opacity="{Binding Opacity}">
                             <TextBlock Style="{StaticResource Glyph}" Text="&#xE7E8;" Foreground="{Binding Brush}" FontSize="15"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
-                        <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" Margin="14,0,0,0" VerticalAlignment="Center" />
-                        <TextBlock Grid.Column="2" Text="{Binding When}" Style="{StaticResource Small}" VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center" Opacity="{Binding Opacity}">
+                            <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding DismissedText}" Style="{StaticResource FaintText}" Margin="0,2,0,0"
+                                       Visibility="{Binding DismissedText, Converter={StaticResource Has}}" />
+                        </StackPanel>
+                        <TextBlock Grid.Column="2" Text="{Binding When}" Style="{StaticResource Small}" VerticalAlignment="Center" Opacity="{Binding Opacity}" />
+                        <ContentControl Grid.Column="3" Content="{Binding}" ContentTemplate="{StaticResource DismissButtons}" Focusable="False"
+                                        VerticalAlignment="Center" Margin="8,0,-8,0" />
                     </Grid>
-                    <TextBlock Text="{Binding Summary}" Style="{StaticResource Body}" Margin="0,12,0,0" />
+                    <TextBlock Text="{Binding Summary}" Style="{StaticResource Body}" Margin="0,12,0,0" Opacity="{Binding Opacity}" />
+                    <StackPanel Opacity="{Binding Opacity}">
                     <ItemsControl ItemsSource="{Binding Steps}" Margin="0,14,0,0">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -153,6 +183,7 @@
                     <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
                         <TextBlock Text="What did you see?" Style="{StaticResource Small}" Foreground="{DynamicResource Text}" VerticalAlignment="Center" Margin="0,0,12,0" />
                         <ComboBox ItemsSource="{Binding AnswerOptions}" SelectedItem="{Binding Note, Mode=TwoWay}" MinWidth="260" />
+                    </StackPanel>
                     </StackPanel>
                 </StackPanel>
             </Border>
@@ -314,6 +345,14 @@
                         <DockPanel Margin="0,0,0,0">
                             <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="Open the timeline" Command="{Binding NavigateCommand}" CommandParameter="timeline"
                                     VerticalAlignment="Bottom" Margin="0,0,0,12" />
+                            <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Command="{Binding DismissAllCommand}"
+                                    ToolTip="Clears every alert from the Overview. They stay in the timeline, where you can bring them back."
+                                    VerticalAlignment="Bottom" Margin="0,0,20,12" Visibility="{Binding Recent, Converter={StaticResource Has}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Glyph}" Text="&#xE711;" FontSize="11" VerticalAlignment="Center" />
+                                    <TextBlock Text="Dismiss all" Margin="6,0,0,0" />
+                                </StackPanel>
+                            </Button>
                             <TextBlock Style="{StaticResource Section}" Text="Recent problems" />
                         </DockPanel>
                         <Border Style="{StaticResource Card}" Padding="0" ClipToBounds="True">
@@ -645,6 +684,7 @@
                                 <CheckBox Style="{StaticResource Switch}" Content="The graphics card stays at its temperature limit" IsChecked="{Binding NotifyHeat, Mode=TwoWay}" />
                                 <CheckBox Style="{StaticResource Switch}" Content="Graphics memory is nearly full" IsChecked="{Binding NotifyMemory, Mode=TwoWay}" />
                                 <CheckBox Style="{StaticResource Switch}" Content="The battery is low" IsChecked="{Binding NotifyBattery, Mode=TwoWay}" />
+                                <CheckBox Style="{StaticResource Switch}" Content="The charger keeps cutting out" IsChecked="{Binding NotifyCharger, Mode=TwoWay}" />
                                 <CheckBox Style="{StaticResource Switch}" Content="The hardware reports a serious error" IsChecked="{Binding NotifyHardware, Mode=TwoWay}" />
                                 <CheckBox Style="{StaticResource Switch}" Content="A newer driver or BIOS is available" IsChecked="{Binding NotifyDriverUpdates, Mode=TwoWay}" />
                                 <WrapPanel Margin="0,12,0,0">

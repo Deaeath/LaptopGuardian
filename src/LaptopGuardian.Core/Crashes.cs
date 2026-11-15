@@ -88,6 +88,8 @@ public sealed record CrashFacts
     /// </summary>
     public UsageEntry? PowerBefore { get; init; }
     public int GraphicsErrorsBefore { get; init; }
+    /// <summary>Times the charger disconnected in the hour before.</summary>
+    public int ChargerDropsBefore { get; init; }
 }
 
 public sealed record CrashVerdict(CrashCause Cause, string Title, string Summary, string Detail, Severity Severity);
@@ -96,7 +98,8 @@ public sealed record CrashVerdict(CrashCause Cause, string Title, string Summary
 public static class CrashClassifier
 {
     /// <summary>Raise this when the reasoning changes, so existing entries are worked out again.</summary>
-    public const int Version = 2;
+    /// <remarks>3: says when the charger cut out in the hour before.</remarks>
+    public const int Version = 3;
 
     /// <summary>Stop codes raised by a failed sleep or wake: Modern Standby watchdogs and driver power transitions.</summary>
     public static readonly uint[] SleepStopCodes = { 0x14F, 0x15F, 0x9F, 0xA0 };
@@ -121,6 +124,12 @@ public static class CrashClassifier
             0 => "",
             1 => " One graphics error was logged in the hour before.",
             var n => $" {n} graphics errors were logged in the hour before.",
+        };
+        gfx += f.ChargerDropsBefore switch
+        {
+            0 => "",
+            1 => " The charger disconnected once in the hour before.",
+            var n => $" The charger cut out {n} times in the hour before.",
         };
 
         if (f.BugcheckCode != 0 && f.BugcheckCode != 0x1C8)
@@ -207,7 +216,12 @@ public static class CrashScanner
     };
 
     /// <param name="needsWork">Whether this restart time still needs working out. Finished entries are left as they are.</param>
-    public static List<Found> Scan(TimeSpan window, BatteryReport? battery, FlightRecorder? recorder = null, Func<DateTimeOffset, bool>? needsWork = null)
+    /// <param name="knownReading">
+    /// The flight recorder reading already saved with this crash. The recorder keeps only a couple of days, so working
+    /// out an older crash again must not lose what it saw.
+    /// </param>
+    public static List<Found> Scan(TimeSpan window, BatteryReport? battery, FlightRecorder? recorder = null, Func<DateTimeOffset, bool>? needsWork = null,
+        Func<DateTimeOffset, FlightSample?>? knownReading = null)
     {
         var kp = EventLogX.Query("System",
             $"*[System[Provider[@Name='Microsoft-Windows-Kernel-Power'] and EventID=41 and {EventLogX.Since(window)}]]",
@@ -234,6 +248,8 @@ public static class CrashScanner
             $"*[System[Provider[@Name='Microsoft-Windows-Kernel-Power' or @Name='Microsoft-Windows-Power-Troubleshooter'] and (EventID=42 or EventID=506 or EventID=107 or EventID=507 or EventID=1) and {EventLogX.Since(span)}]]",
             r => new Tuple<DateTimeOffset, bool>(EventLogX.Time(r), r.Id is 42 or 506));
 
+        var charger = Charger.Read(span);
+
         var found = new List<Found>();
         foreach (var e in kp)
         {
@@ -248,7 +264,7 @@ public static class CrashScanner
             var thisBoot = bootsBefore.Count > 0 ? bootsBefore[^1] : e.Time.AddSeconds(-5);
             DateTimeOffset? previousBoot = bootsBefore.Count > 1 ? bootsBefore[^2] : null;
 
-            var reading = recorder?.LastBefore(thisBoot, TimeSpan.FromHours(6));
+            var reading = recorder?.LastBefore(thisBoot, TimeSpan.FromHours(6)) ?? knownReading?.Invoke(e.Time);
             if (reading != null && previousBoot is DateTimeOffset pb && reading.At < pb) reading = null;
 
             DateTimeOffset? activity = NewestOf(reading?.At, NewestEntryBefore(thisBoot, previousBoot), alive);
@@ -269,6 +285,7 @@ public static class CrashScanner
                 SleepInProgress = e.SleepInProgress,
                 PowerBefore = battery?.StateAt(probe),
                 GraphicsErrorsBefore = gfx,
+                ChargerDropsBefore = Charger.DisconnectsBefore(charger, probe, Charger.CrashWindow),
             };
             found.Add(new Found(e, facts, CrashClassifier.Classify(facts)));
         }
@@ -325,6 +342,7 @@ public static class CrashScanner
             ConnectedStandby = f.Event.ConnectedStandby,
             SleepInProgress = f.Event.SleepInProgress,
             GraphicsErrorsBefore = f.Facts.GraphicsErrorsBefore,
+            ChargerDropsBefore = f.Facts.ChargerDropsBefore,
         },
     };
 

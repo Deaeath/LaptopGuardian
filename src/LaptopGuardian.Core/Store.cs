@@ -14,6 +14,7 @@ public sealed class AppSettings
     public bool NotifyMemory { get; set; } = true;
     public bool NotifyBattery { get; set; } = true;
     public bool NotifyHardware { get; set; } = true;
+    public bool NotifyCharger { get; set; } = true;
     public bool NotifyDriverUpdates { get; set; } = true;
     public bool AutoUpdate { get; set; } = true;
 }
@@ -23,11 +24,24 @@ public sealed class AppState
     public bool HistoryImported { get; set; }
     public DateTimeOffset? LastScan { get; set; }
     public DateTimeOffset? LastDriverCheck { get; set; }
+    /// <summary>Version 2.2 and earlier: suggestions hidden for good. Moved into <see cref="HiddenSuggestions"/> on load.</summary>
     public List<string> DismissedRecommendations { get; set; } = new();
+    /// <summary>Suggestions the person hid, by id, with when and what they said, so they can come back when things change.</summary>
+    public Dictionary<string, HiddenSuggestion> HiddenSuggestions { get; set; } = new();
     /// <summary>Driver updates already announced, so each one is announced once.</summary>
     public List<string> AnnouncedDriverUpdates { get; set; } = new();
     /// <summary>When the stuck crash reports were last cleared; older log entries of them no longer count.</summary>
     public DateTimeOffset? ReportsClearedAt { get; set; }
+
+    /// <summary>Moves the old hidden-for-good list over, as hidden now. Returns true if anything moved.</summary>
+    public bool MigrateHidden(DateTimeOffset now)
+    {
+        if (DismissedRecommendations.Count == 0) return false;
+        foreach (var id in DismissedRecommendations)
+            HiddenSuggestions.TryAdd(id, new HiddenSuggestion { At = now });
+        DismissedRecommendations.Clear();
+        return true;
+    }
 }
 
 /// <summary>Reads and writes small JSON files atomically (write, then rename), so a crash never leaves half a file.</summary>
@@ -114,6 +128,7 @@ public sealed class Journal
             {
                 incident.UserNote ??= _items[i].UserNote;
                 incident.Gpu ??= _items[i].Gpu;
+                incident.DismissedAt ??= _items[i].DismissedAt;
                 _items[i] = incident;
             }
             else _items.Add(incident);
@@ -131,6 +146,25 @@ public sealed class Journal
             SaveLocked();
         }
         Changed?.Invoke();
+    }
+
+    /// <summary>Dismisses (or brings back) the given alerts. Returns how many changed.</summary>
+    public int SetDismissed(IEnumerable<string> ids, bool dismissed, DateTimeOffset? at = null)
+    {
+        var set = ids.ToHashSet();
+        int changed = 0;
+        lock (_gate)
+        {
+            foreach (var item in _items.Where(i => set.Contains(i.Id)))
+            {
+                if (item.Dismissed == dismissed) continue;
+                item.DismissedAt = dismissed ? at ?? DateTimeOffset.Now : null;
+                changed++;
+            }
+            if (changed > 0) SaveLocked();
+        }
+        if (changed > 0) Changed?.Invoke();
+        return changed;
     }
 
     public void Save()
